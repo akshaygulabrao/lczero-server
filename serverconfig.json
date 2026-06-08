@@ -1,25 +1,22 @@
 {
   "database": {
-    "host": "localhost",
-    "user": "lc0",
-    "dbname": "lc0",
-    "password": "lc0pass"
+    "dbname": "chessckers.db"
   },
   "clients": {
-    "minClientVersion": 25,
-    "nextClientVersion": 25,
-    "minEngineVersion": "v0.24.0",
-    "nextEngineVersion": "v0.24.0"
+    "minClientVersion": 1,
+    "nextClientVersion": 1,
+    "minEngineVersion": "v0.0.0",
+    "nextEngineVersion": "v0.0.0"
   },
   "urls": {
     "onNewNetwork": [],
     "networkLocation": "/cached/network/sha/",
-    "backupNetworkLocation": "http://data.lczero.org/files/networks/"
-  }, 
+    "backupNetworkLocation": ""
+  },
   "matches": {
-    "games": 600,
-    "parameters": ["--tempdecay-moves=20", "--temperature=2", "--temp-visit-offset=-8", "--cpuct=2.5", "--policy-softmax-temp=1.0", "--noise=true", "--minibatch-size=256", "--out-of-order-eval=true", "--max-collision-visits=9999", "--max-collision-events=32", "--cache-history-length=0", "--smart-pruning-factor=1.33"],
-    "threshold": -50.0
+    "games": 40,
+    "parameters": ["--visits=128", "--temperature=1.0", "--tempdecay-moves=10", "--temp-visit-offset=-0.8"],
+    "threshold": -20.0
   },
   "webserver": {
     "address": ":9830"

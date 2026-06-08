@@ -2,9 +2,7 @@ package main
 
 import (
 	"compress/gzip"
-	"config"
 	"crypto/sha256"
-	"db"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +19,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LeelaChessZero/lczero-server/src/config"
+	"github.com/LeelaChessZero/lczero-server/src/db"
 	"github.com/PaesslerAG/gval"
 	"github.com/gin-contrib/multitemplate"
 	"github.com/gin-gonic/gin"
@@ -246,6 +246,23 @@ func getTrainingRun(trainingID uint) (*db.TrainingRun, error) {
 	return &trainingRun, nil
 }
 
+// nextRunSeq atomically increments a counter column (last_network / last_game)
+// on a training_runs row and returns the new value. SQLite has no Postgres-style
+// data-modifying CTE and the bundled SQLite predates UPDATE ... RETURNING, so we
+// do the increment and read inside one transaction. SQLite serializes writers,
+// so the read sees this transaction's own increment with nothing interleaving.
+// `column` is always an internal constant, never user input.
+func nextRunSeq(column string, runID uint) (uint, error) {
+	var next uint
+	err := db.GetDB().Transaction(func(tx *gorm.DB) error {
+		if e := tx.Exec(fmt.Sprintf("UPDATE training_runs SET %s = %s + 1 WHERE id = ?", column, column), runID).Error; e != nil {
+			return e
+		}
+		return tx.Raw(fmt.Sprintf("SELECT %s FROM training_runs WHERE id = ?", column), runID).Row().Scan(&next)
+	})
+	return next, err
+}
+
 func createMatch(trainingRun *db.TrainingRun, targetSlice int, network *db.Network, testonly bool, params string) error {
 	gameCap := config.Config.Matches.Games
 	if targetSlice == 0 {
@@ -400,21 +417,14 @@ func uploadNetwork(c *gin.Context) {
 		c.String(500, "Internal error")
 		return
 	}
-	// Atomic network display number increment and acquire.
-	rows, err := db.GetDB().Raw("WITH updated AS (UPDATE training_runs SET last_network = last_network + 1 WHERE id = ? RETURNING last_network) SELECT * FROM updated", uint(trainingRunID)).Rows()
+	// Atomic network display number increment and acquire (see nextRunSeq).
+	nextNetworkNumber, err := nextRunSeq("last_network", uint(trainingRunID))
 	if err != nil {
 		log.Println(err)
 		c.String(500, "Internal error")
 		return
 	}
-	{
-		defer rows.Close()
-		for rows.Next() {
-			var nextNetworkNumber uint
-			rows.Scan(&nextNetworkNumber)
-			network.NetworkNumber = nextNetworkNumber
-		}
-	}
+	network.NetworkNumber = nextNetworkNumber
 	layers, err := strconv.ParseInt(c.PostForm("layers"), 10, 32)
 	network.Layers = int(layers)
 	filters, err := strconv.ParseInt(c.PostForm("filters"), 10, 32)
@@ -486,9 +496,16 @@ func uploadNetwork(c *gin.Context) {
 	var bestNetwork db.Network
 	err = db.GetDB().Where("id = ?", trainingRun.BestNetworkID).First(&bestNetwork).Error
 	if err != nil {
-		log.Println(err)
-		// No valid best network, but it has uploaded successfully.
-		c.String(http.StatusOK, fmt.Sprintf("Network %s uploaded successfully, remember to manually set it as best.", network.Sha))
+		// No current best network yet: this is the first upload for the run. For
+		// an automated personal fleet, bootstrap by setting this network as best
+		// so clients immediately have something to self-play. No match is created
+		// because there is nothing to compare against yet.
+		if dberr := db.GetDB().Model(&db.TrainingRun{}).Where("id = ?", trainingRun.ID).Update("best_network_id", network.ID).Error; dberr != nil {
+			log.Println(dberr)
+			c.String(500, "Internal error")
+			return
+		}
+		c.String(http.StatusOK, fmt.Sprintf("Network %s uploaded and set as best (bootstrap).", network.Sha))
 		return
 	}
 
@@ -536,31 +553,17 @@ func uploadNetwork(c *gin.Context) {
 }
 
 func checkEngineVersion(engineVersion string, username string, training_id uint) bool {
-	if training_id == 3 {
-		return true
-	}
+	// Chessckers fleet: a single in-house engine (akshay-chessckers-0, currently a
+	// 0.33.0-dev build). Unlike the public lc0 fleet we do NOT reject "-dev"/"-rc"
+	// builds (that was an anti-fragmentation policy for thousands of volunteers).
+	// Accept any client reporting a parseable version >= the configured minimum.
 	v, err := version.NewVersion(engineVersion)
 	if err != nil {
 		return false
 	}
-	target_soft, err := version.NewVersion(config.Config.Clients.NextEngineVersion)
-	if err != nil {
-		log.Println("Invalid comparison version, rejecting all clients!!!")
-		return false
-	}
-	if strings.HasSuffix(engineVersion, "-dev") {
-		if username == "Teststuff" {
-			return true
-		}
-		log.Printf("%s is rejected for using dev version.", username)
-		return false
-	}
-	if v.Compare(target_soft) < 0 {
-		log.Printf("%s would be rejected with proposed threshold.", username)
-	}
 	target, err := version.NewVersion(config.Config.Clients.MinEngineVersion)
 	if err != nil {
-		log.Println("Invalid comparison version, rejecting all clients!!!")
+		log.Println("Invalid MinEngineVersion in config, rejecting all clients!!!")
 		return false
 	}
 	return v.Compare(target) >= 0
@@ -669,23 +672,15 @@ func uploadGame(c *gin.Context) {
 		return
 	}
 
-	// Atomic network game run sequence number increment and acquire.
-	rows, err := db.GetDB().Raw("WITH updated AS (UPDATE training_runs SET last_game = last_game + 1 WHERE id = ? RETURNING last_game) SELECT * FROM updated", uint(training_id)).Rows()
+	// Atomic game sequence number increment and acquire (see nextRunSeq).
+	nextGameNumber, err := nextRunSeq("last_game", uint(training_id))
 	if err != nil {
 		log.Println(err)
 		c.String(500, "Internal error")
 		return
 	}
-	var nextGameNumber uint
-	nextGameNumber = 0
-	{
-		defer rows.Close()
-		for rows.Next() {
-			rows.Scan(&nextGameNumber)
-		}
-	}
 	if nextGameNumber == 0 {
-		log.Println("Couldn't get a new game number.'")
+		log.Println("Couldn't get a new game number.")
 		c.String(500, "Internal error")
 		return
 	}
@@ -910,12 +905,15 @@ func matchResult(c *gin.Context) {
 }
 
 func getActiveUsers(userLimit int) (gin.H, error) {
-	rows, err := db.GetDB().Raw(`SELECT user_id, username, MAX(version), MAX(SPLIT_PART(engine_version, '.', 2) :: INTEGER), MAX(training_games.created_at), count(*), count(*) FILTER (WHERE training_run_id = 1) as count_run1, assigned_training_run_id FROM training_games
+	// SQLite-compatible rewrite of the per-user "last day" activity query:
+	// no SPLIT_PART/::INTEGER (just show the engine version string), aggregate
+	// FILTER -> SUM(CASE ...), and now()-INTERVAL -> datetime('now','-1 day').
+	rows, err := db.GetDB().Raw(`SELECT user_id, username, MAX(version), MAX(engine_version), MAX(training_games.created_at), count(*) as game_count, SUM(CASE WHEN training_run_id = 1 THEN 1 ELSE 0 END) as count_run1, assigned_training_run_id FROM training_games
 LEFT JOIN users
 ON users.id = training_games.user_id
-WHERE training_games.created_at >= now() - INTERVAL '1 day'
+WHERE training_games.created_at >= datetime('now', '-1 day')
 GROUP BY user_id, username, assigned_training_run_id
-ORDER BY count DESC`).Rows()
+ORDER BY game_count DESC`).Rows()
 	if err != nil {
 		return nil, err
 	}
@@ -929,7 +927,7 @@ ORDER BY count DESC`).Rows()
 		var username string
 		var version int
 		var engine_version string
-		var created_at time.Time
+		var created_at string
 		var count uint64
 		var count_run1 uint64
 		var assigned_training_run_id uint
@@ -950,7 +948,7 @@ ORDER BY count DESC`).Rows()
 				"system":                   "",
 				"version":                  version,
 				"engine":                   engine_version,
-				"last_updated":             created_at.Format("2006-01-02 15:04:05 -07:00"),
+				"last_updated":             created_at,
 				"assigned_training_run_id": assigned_training_run_id,
 			})
 		}
@@ -1237,8 +1235,9 @@ func frontPage(c *gin.Context) {
 	network := db.Network{
 		TrainingRunID: 1,
 	}
-	err = db.GetDB().Where(&network).Last(&network).Error
-	if err != nil {
+	// Before the first network is uploaded there is no row yet; that is fine, we
+	// just show zero progress rather than 500ing the whole dashboard.
+	if err = db.GetDB().Where(&network).Last(&network).Error; err != nil && !gorm.IsRecordNotFoundError(err) {
 		log.Println(err)
 		c.String(500, "Internal error")
 		return
@@ -1413,7 +1412,8 @@ func viewMatchGame(c *gin.Context) {
 	}
 
 	c.HTML(http.StatusOK, "game", gin.H{
-		"pgn": strings.Replace(game.Pgn, "e.p.", "", -1),
+		// Chessckers movelog is stored verbatim (no chess "e.p." annotations to strip).
+		"pgn": game.Pgn,
 	})
 }
 

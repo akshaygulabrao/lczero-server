@@ -1,25 +1,11 @@
 {{define "content"}}
-<form style="display: none;"><textarea style="display: none;" id="pgnText">
-{{.pgn}}
-</textarea></form>
-<div id="GameBoard"></div>
-<div id="GameButtons"></div>
-<div id="GameText"></div> 
+<h2>Game</h2>
+<p>Chessckers is a 10&times;10 chess-vs-checkers hybrid with stacked black pieces,
+so there is no standard chess PGN / chessboard viewer. The self-play game is shown
+below as the engine's own movelog (White FIDE moves and Black checker
+hops/chains/deploys/charges), terminated by the result and opening length.</p>
+<pre style="white-space: pre-wrap; word-break: break-word; background:#f6f8fa; padding:1em; border-radius:6px;">{{.pgn}}</pre>
 {{end}}
 
 {{define "scripts"}}
-<style type="text/css">
-
-.moveOn,
-.variationOn {
-  background: #DAF4D7;
-}
-
-</style>
-<script type="text/javascript" src="/js/pgn4web.js"></script>
-<script type="text/javascript">
-SetImagePath("/images");
-SetHighlightOption(true)
-SetShortcutKeysEnabled(true);
-</script>
 {{end}}

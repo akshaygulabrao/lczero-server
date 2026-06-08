@@ -1,0 +1,14 @@
+# SQLite database (+ WAL/shm sidecars)
+chessckers.db
+chessckers.db-wal
+chessckers.db-shm
+
+# Runtime-uploaded artifacts (networks, training chunks, movelogs)
+/networks/
+/games/
+/pgns/
+
+# Built binaries
+/main
+/cc-server
+/lczero-server
