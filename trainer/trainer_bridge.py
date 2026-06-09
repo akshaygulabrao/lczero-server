@@ -136,6 +136,16 @@ def main() -> int:
     p.add_argument("--buffer-cap", type=int, default=50000)
     p.add_argument("--batch-size", type=int, default=256)
     p.add_argument("--min-buffer", type=int, default=2000)
+    # NN architecture handed to the trainer. MUST be v2: akshay-chessckers-0
+    # encodes 16 position planes (the v2 representation); a v1 net has a
+    # 15-channel input conv, so the engine reads 16 planes into a 15-channel
+    # weight and SIGTRAPs on the first eval. v1 nets are NOT engine-loadable.
+    p.add_argument("--arch-version", choices=["v1", "v2"], default="v2")
+    p.add_argument("--c-filters", type=int, default=96)
+    p.add_argument("--n-blocks", type=int, default=4)
+    p.add_argument("--d-hidden", type=int, default=256)
+    p.add_argument("--tf-blocks", type=int, default=0,
+                   help="v2 transformer blocks interleaved into the trunk (0 = pure ResNet)")
     p.add_argument("--no-trainer", action="store_true",
                    help="do NOT spawn train_continuous (assume it runs elsewhere); just feed+upload")
     args = p.parse_args()
@@ -161,6 +171,11 @@ def main() -> int:
     if not args.no_trainer:
         cmd = [python, "-m", "chessckers_engine.train_continuous",
                "--run-dir", str(run_dir),
+               "--arch-version", args.arch_version,
+               "--c-filters", str(args.c_filters),
+               "--n-blocks", str(args.n_blocks),
+               "--d-hidden", str(args.d_hidden),
+               "--tf-blocks", str(args.tf_blocks),
                "--buffer-cap", str(args.buffer_cap),
                "--batch-size", str(args.batch_size),
                "--min-buffer", str(args.min_buffer),

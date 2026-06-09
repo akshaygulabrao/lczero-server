@@ -104,6 +104,13 @@ upload seeds the run; from then the loop self-sustains:
 `dispatch → play → upload_game → feed → train → weights.bin → upload_network →
 promote → dispatch the better net`.
 
+> **Net architecture must be v2 (16 planes).** The engine encodes 16 position
+> planes (the v2 representation); a v1 net has a **15-channel** input conv, so the
+> engine reads 16 planes into a 15-channel weight and **SIGTRAPs** on the first
+> eval. The bridge therefore defaults `train_continuous` to `--arch-version v2`
+> (`ARCH_VERSION` / `TF_BLOCKS` env in `launch_trainer.sh` to tune). Do not train
+> v1 — its nets are not engine-loadable.
+
 ## Verified
 
 `go build` + `go vet` clean. End-to-end on SQLite (curl): `upload_network` (first
