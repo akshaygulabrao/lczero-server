@@ -156,6 +156,18 @@ def main() -> int:
     buffer_dir.mkdir(parents=True, exist_ok=True)
     state_file = run_dir / "bridge_state.json"
 
+    # Remove any weights.bin left over from a previous run BEFORE the trainer
+    # starts. Otherwise our first poll could upload that stale net — possibly an
+    # incompatible v1 from an earlier run — which the server would bootstrap as
+    # best and the engine would SIGTRAP on, all before train_continuous overwrites
+    # it with this run's (v2) net. (Skip when --no-trainer: then weights.bin is
+    # produced by a trainer running elsewhere and we must not delete it.)
+    if not args.no_trainer:
+        try:
+            weights_bin.unlink()
+        except FileNotFoundError:
+            pass
+
     # Resume the feed high-water mark so a restart doesn't re-feed already-ingested
     # (and deleted) chunks.
     hwm = 0
