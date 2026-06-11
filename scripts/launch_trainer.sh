@@ -53,7 +53,7 @@ VALUE_DISCOUNT="${VALUE_DISCOUNT:-1.0}"   # per-ply WDL discount gamma. 1.0 = OF
 VALUE_Q_RATIO="${VALUE_Q_RATIO:-0.5}"     # blend the search value q into the value target: (1-r)*z + r*q. The lc0-idiomatic variance reducer (and the companion to discount=1.0: softens overconfident early one-hot z without distorting the win). Default 0.5 (50/50 z/q); set 0.0 to disable. The engine emits search_wdl, so this is ready.
 LR="${LR:-0.02}"                        # base LR (SGD+Nesterov; ~20x the old Adam 1e-3)
 LR_WARMUP_STEPS="${LR_WARMUP_STEPS:-1000}"
-LR_DECAY_STEPS="${LR_DECAY_STEPS:-150000}"
+LR_DECAY_STEPS="${LR_DECAY_STEPS:-0}"   # 0 = constant LR (lc0 methodology: drop manually by restarting with a lower LR when arena Elo plateaus; warm-resume keeps momentum + step counter)
 LR_GAMMA="${LR_GAMMA:-0.5}"
 EMA_DECAY="${EMA_DECAY:-0.999}"         # publish EMA of weights (0 = raw)
 BATCH_SIZE="${BATCH_SIZE:-1024}"        # SGD minibatch (lc0 uses 1024-4096; was bridge-default 256). Larger -> smoother gradients
