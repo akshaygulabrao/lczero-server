@@ -8,10 +8,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Experiment name for the bootstrapped run (TrainingRun.Description; shown in the
+# dashboard). Re-bootstrap after reset_fleet.sh picks this up; no-op if a run exists.
+RUN_NAME="${RUN_NAME:-V4_e8d8}"
+
 echo "[server] building..."
 CGO_ENABLED=1 go build -o cc-server .
 CGO_ENABLED=1 go build -o cc-bootstrap ./cmd/bootstrap
-./cc-bootstrap   # schema + run #1 (+ train/match params); no-op if already present
+RUN_NAME="$RUN_NAME" ./cc-bootstrap   # schema + run #1 named "$RUN_NAME" (+ train/match params); no-op if already present
 
 ts_name="$(hostname -s 2>/dev/null || hostname)"
 ts_ip="$(tailscale ip -4 2>/dev/null | head -1 || echo '?')"

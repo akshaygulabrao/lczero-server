@@ -482,74 +482,21 @@ func uploadNetwork(c *gin.Context) {
 		}
 	}
 
-	matchParams := trainingRun.MatchParameters
-	if matchParams == "" {
-		params, err := json.Marshal(config.Config.Matches.Parameters)
-		if err != nil {
-			log.Println(err)
-			c.String(500, "Internal error")
-			return
-		}
-		matchParams = string(params[:])
-	}
-	// Create a match to see if this network is better
-	var bestNetwork db.Network
-	err = db.GetDB().Where("id = ?", trainingRun.BestNetworkID).First(&bestNetwork).Error
-	if err != nil {
-		// No current best network yet: this is the first upload for the run. For
-		// an automated personal fleet, bootstrap by setting this network as best
-		// so clients immediately have something to self-play. No match is created
-		// because there is nothing to compare against yet.
-		if dberr := db.GetDB().Model(&db.TrainingRun{}).Where("id = ?", trainingRun.ID).Update("best_network_id", network.ID).Error; dberr != nil {
-			log.Println(dberr)
-			c.String(500, "Internal error")
-			return
-		}
-		c.String(http.StatusOK, fmt.Sprintf("Network %s uploaded and set as best (bootstrap).", network.Sha))
-		return
-	}
-
-	err = createMatch(trainingRun, 1, &network, c.DefaultPostForm("testonly", "0") == "1", matchParams)
-	if err != nil {
+	// Arena removed (AlphaZero-final / modern-lc0 policy): every uploaded network
+	// is promoted to best immediately, with NO promotion or regression matches.
+	// On a small fleet any open match starves self-play (nextGame hands every
+	// client a match game until the match closes), so gating cost more throughput
+	// than the −20 Elo "not-regression" guard was worth. Strength is now tracked
+	// out-of-band (watch_game / offline matches), not by in-fleet arenas.
+	//
+	// This also subsumes the old bootstrap special-case: with auto-promote the
+	// first upload (no current best) simply sets itself as best like any other.
+	if err := db.GetDB().Model(&db.TrainingRun{}).Where("id = ?", trainingRun.ID).Update("best_network_id", network.ID).Error; err != nil {
 		log.Println(err)
 		c.String(500, "Internal error")
 		return
 	}
-
-	// Regression tests for current best.  Done here because the 'end of match' code logic isn't thread safe, so could create matches multiple times.
-	var prevNetwork1 db.Network
-	err = db.GetDB().Where("network_number = ?", bestNetwork.NetworkNumber-3).First(&prevNetwork1).Error
-	if err == nil {
-		createMatch(trainingRun, 2, &prevNetwork1, true, matchParams)
-	}
-	var prevNetwork2 db.Network
-	err = db.GetDB().Where("network_number = ?", bestNetwork.NetworkNumber-10).First(&prevNetwork2).Error
-	if err == nil {
-		createMatch(trainingRun, 3, &prevNetwork2, true, matchParams)
-	}
-	if bestNetwork.NetworkNumber%15 == 0 {
-		var prevNetwork2 db.Network
-		err = db.GetDB().Where("network_number = ?", bestNetwork.NetworkNumber-30).First(&prevNetwork2).Error
-		if err == nil {
-			createMatch(trainingRun, 0, &prevNetwork2, true, matchParams)
-		}
-	}
-	if bestNetwork.NetworkNumber%25 == 0 {
-		var prevNetwork2 db.Network
-		err = db.GetDB().Where("network_number = ?", bestNetwork.NetworkNumber-100).First(&prevNetwork2).Error
-		if err == nil {
-			createMatch(trainingRun, 0, &prevNetwork2, true, matchParams)
-		}
-	}
-	if bestNetwork.NetworkNumber%75 == 0 {
-		var prevNetwork2 db.Network
-		err = db.GetDB().Where("network_number = ?", bestNetwork.NetworkNumber-300).First(&prevNetwork2).Error
-		if err == nil {
-			createMatch(trainingRun, 0, &prevNetwork2, true, matchParams)
-		}
-	}
-
-	c.String(http.StatusOK, fmt.Sprintf("Network %s uploaded successfully.", network.Sha))
+	c.String(http.StatusOK, fmt.Sprintf("Network %s uploaded and promoted to best.", network.Sha))
 }
 
 func checkEngineVersion(engineVersion string, username string, training_id uint) bool {
