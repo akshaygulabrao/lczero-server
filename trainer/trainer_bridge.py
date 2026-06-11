@@ -242,7 +242,7 @@ def main() -> int:
                "--lr-decay-steps", str(args.lr_decay_steps),
                "--lr-gamma", str(args.lr_gamma),
                "--ema-decay", str(args.ema_decay),
-               "--ckpt-seconds", "30"]
+               "--ckpt-seconds", "300"]
         if args.base:
             cmd += ["--base", args.base]
         print(f"[bridge] starting trainer: {' '.join(cmd)}", flush=True)
