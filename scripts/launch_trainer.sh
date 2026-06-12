@@ -41,7 +41,7 @@ BUFFER_CAP="${BUFFER_CAP:-500000}"      # hard RAM position cap (was code-defaul
 # with no cold rebuild. Set >0 to ALSO snapshot every N s for crash safety (the
 # buffer can be large, so periodic writes cost I/O; 0 = shutdown-only).
 BUFFER_SNAPSHOT_SECONDS="${BUFFER_SNAPSHOT_SECONDS:-0}"
-PUBLISH_GAMES="${PUBLISH_GAMES:-250}"   # publish a net per this many ingested games (arenas removed -> frequent publish is free; AZ-final-style continuous deploy)
+PUBLISH_GAMES="${PUBLISH_GAMES:-100}"   # publish a net per this many ingested games (arenas removed -> frequent publish is free; AZ-final-style continuous deploy)
 PUBLISH_STEPS="${PUBLISH_STEPS:-0}"     # OR per this many SGD steps (0 = off)
 PUBLISH_SECONDS="${PUBLISH_SECONDS:-0}" # OR time floor (0 = off; progress-gated)
 # Replay window in GAMES — lc0/KataGo GROWING window: starts at WINDOW_GAMES_MIN
