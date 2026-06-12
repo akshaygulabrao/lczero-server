@@ -51,7 +51,7 @@ PUBLISH_SECONDS="${PUBLISH_SECONDS:-0}" # OR time floor (0 = off; progress-gated
 WINDOW_GAMES="${WINDOW_GAMES:-4000}"        # ramp CEILING (max window; was 2000 -> 4000 for a bigger replay buffer)
 WINDOW_GAMES_MIN="${WINDOW_GAMES_MIN:-400}" # ramp FLOOR (start window; 0 = fixed, no ramp)
 WINDOW_RAMP_ALPHA="${WINDOW_RAMP_ALPHA:-0.75}"  # ramp exponent (KataGo default; lower = slower/wider ramp)
-REPLAY_FACTOR="${REPLAY_FACTOR:-40}"    # max samples = this x positions-ingested. 40 (was code-default 8) since the trainer is generation-bound (idle ~88% waiting on self-play); raise to take more SGD steps per game
+REPLAY_FACTOR="${REPLAY_FACTOR:-8}"    # max samples = this x positions-ingested. 8 (code default); set down from 40 now that self-play (visits=100) out-produces the trainer — at ~9x actual reuse the 8x throttle binds, capping replay at a moderate ~8 samples/position
 VALUE_DISCOUNT="${VALUE_DISCOUNT:-1.0}"   # per-ply WDL discount gamma. 1.0 = OFF (pure WDL): "mate faster" now comes from the moves-left HEAD's Q-gated search effect (engine has_mlh), not from discounting the win itself — so a faster-but-riskier line can't beat a slower-certain win (the discount's failure mode). <1 still works (0.99 = ~0.6 win-mass at 50 plies) but reintroduces that risk; prefer Q_RATIO for the early-game variance the discount used to mask.
 VALUE_Q_RATIO="${VALUE_Q_RATIO:-0.5}"     # blend the search value q into the value target: (1-r)*z + r*q. The lc0-idiomatic variance reducer (and the companion to discount=1.0: softens overconfident early one-hot z without distorting the win). Default 0.5 (50/50 z/q); set 0.0 to disable. The engine emits search_wdl, so this is ready.
 LR="${LR:-0.02}"                        # base LR (SGD+Nesterov; ~20x the old Adam 1e-3)
