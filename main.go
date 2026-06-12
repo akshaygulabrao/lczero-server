@@ -496,6 +496,10 @@ func uploadNetwork(c *gin.Context) {
 		c.String(500, "Internal error")
 		return
 	}
+	// Net promotions are otherwise invisible in the server log (only in the HTTP
+	// body the bridge sees), and with arenas removed every upload promotes — this
+	// is the one signal that the train→promote loop is alive.
+	log.Printf("[promote] net id=%d sha=%s promoted to best (run %d)", network.ID, network.Sha, trainingRun.ID)
 	c.String(http.StatusOK, fmt.Sprintf("Network %s uploaded and promoted to best.", network.Sha))
 }
 
@@ -1717,7 +1721,27 @@ func createTemplates() multitemplate.Render {
 }
 
 func setupRouter() *gin.Engine {
-	router := gin.Default()
+	// gin.New() instead of gin.Default(): Default() installs the per-request
+	// Logger() middleware, which floods the server log with one line per request
+	// — and GIN_MODE=release does NOT silence it. We keep Recovery() and add a
+	// LoggerWithConfig that SKIPS the hot polling routes (clients poll these
+	// several times a second per node): next_game, upload_game, and the two
+	// net-fetch routes (get_network redirect + the cached file serve). Everything
+	// else (dashboard pages, match_result, upload_network) still logs.
+	router := gin.New()
+	router.Use(gin.LoggerWithConfig(gin.LoggerConfig{
+		SkipPaths: []string{
+			"/next_game",
+			"/upload_game",
+			"/get_network",
+		},
+		Skip: func(c *gin.Context) bool {
+			// /cached/network/sha/:sha is a parameterized path, so SkipPaths
+			// (exact match) can't catch it — match by prefix instead.
+			return strings.HasPrefix(c.Request.URL.Path, "/cached/network/")
+		},
+	}))
+	router.Use(gin.Recovery())
 	router.HTMLRender = createTemplates()
 	router.MaxMultipartMemory = 32 << 20 // 32 MiB
 	router.Static("/css", "./public/css")
