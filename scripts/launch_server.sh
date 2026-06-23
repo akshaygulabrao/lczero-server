@@ -8,6 +8,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Guard: fleet runs on the cloud GPU box, not on macOS.
+if [ "$(uname -s)" = Darwin ] && [ -z "${ON_BOX:-}" ]; then
+  echo "[guard] This script runs on the Vast.ai GPU box, not locally." >&2
+  echo "[guard] Use: python engine/scripts/cc.py <command>" >&2
+  echo "[guard] Or: cc box / cc fresh-run / cc restart-trainer / cc status / cc games" >&2
+  exit 1
+fi
+
 # Experiment name for the bootstrapped run (TrainingRun.Description; shown in the
 # dashboard). Re-bootstrap after reset_fleet.sh picks this up; no-op if a run exists.
 RUN_NAME="${RUN_NAME:-V4_e8d8}"

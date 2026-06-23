@@ -7,6 +7,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+if [ "$(uname -s)" = Darwin ] && [ -z "${ON_BOX:-}" ]; then
+  echo "[guard] This script runs on the Vast.ai GPU box, not locally." >&2
+  echo "[guard] Use: python engine/scripts/cc.py <command>" >&2
+  exit 1
+fi
+
 SERVER="${SERVER:-http://localhost:9830}"   # bridge runs on the server host
 ENGINE_DIR="${ENGINE_DIR:-/Users/ox/AAworkspace/chessckers/engine}"
 TRAINING_ID="${TRAINING_ID:-1}"
@@ -54,7 +60,7 @@ WINDOW_RAMP_ALPHA="${WINDOW_RAMP_ALPHA:-0.75}"  # ramp exponent (KataGo default;
 REPLAY_FACTOR="${REPLAY_FACTOR:-8}"    # max samples = this x positions-ingested. 8 (code default); set down from 40 now that self-play (visits=100) out-produces the trainer — at ~9x actual reuse the 8x throttle binds, capping replay at a moderate ~8 samples/position
 VALUE_DISCOUNT="${VALUE_DISCOUNT:-1.0}"   # per-ply WDL discount gamma. 1.0 = OFF (pure WDL): "mate faster" now comes from the moves-left HEAD's Q-gated search effect (engine has_mlh), not from discounting the win itself — so a faster-but-riskier line can't beat a slower-certain win (the discount's failure mode). <1 still works (0.99 = ~0.6 win-mass at 50 plies) but reintroduces that risk; prefer Q_RATIO for the early-game variance the discount used to mask.
 VALUE_Q_RATIO="${VALUE_Q_RATIO:-0.5}"     # blend the search value q into the value target: (1-r)*z + r*q. The lc0-idiomatic variance reducer (and the companion to discount=1.0: softens overconfident early one-hot z without distorting the win). Default 0.5 (50/50 z/q); set 0.0 to disable. The engine emits search_wdl, so this is ready.
-LR="${LR:-0.02}"                        # base LR (SGD+Nesterov; ~20x the old Adam 1e-3)
+LR="${LR:-0.02}"                        # Adam learning rate
 LR_WARMUP_STEPS="${LR_WARMUP_STEPS:-0}"   # 0 = no warmup (flat from step 0). Set >0 to experiment with a linear ramp.
 LR_DECAY_STEPS="${LR_DECAY_STEPS:-0}"   # 0 = no step schedule / constant LR. Set >0 (+LR_GAMMA) to experiment with stepped decay.
 LR_GAMMA="${LR_GAMMA:-0.5}"

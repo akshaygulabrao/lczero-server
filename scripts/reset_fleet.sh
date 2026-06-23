@@ -9,6 +9,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+if [ "$(uname -s)" = Darwin ] && [ -z "${ON_BOX:-}" ]; then
+  echo "[guard] This script runs on the Vast.ai GPU box, not locally." >&2
+  echo "[guard] Use: python engine/scripts/cc.py <command>" >&2
+  exit 1
+fi
+
 echo "[reset] stopping fleet processes..."
 pkill -f cc-server 2>/dev/null || true
 pkill -f trainer_bridge 2>/dev/null || true
