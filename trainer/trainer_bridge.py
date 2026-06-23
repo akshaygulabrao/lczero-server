@@ -173,7 +173,7 @@ def main() -> int:
     # encodes 16 position planes (the v2 representation); a v1 net has a
     # 15-channel input conv, so the engine reads 16 planes into a 15-channel
     # weight and SIGTRAPs on the first eval. v1 nets are NOT engine-loadable.
-    p.add_argument("--arch-version", choices=["v1", "v2", "v4"], default="v2")
+    p.add_argument("--arch-version", choices=["v1", "v2", "v4", "v5"], default="v2")
     p.add_argument("--c-filters", type=int, default=96)
     p.add_argument("--n-blocks", type=int, default=4)
     p.add_argument("--d-hidden", type=int, default=256)
