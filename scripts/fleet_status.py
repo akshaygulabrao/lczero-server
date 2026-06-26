@@ -11,6 +11,7 @@ actually need to answer "is it training yet / why no new net?":
 
 Run from anywhere:  scripts/fleet_status.py   (add --loop N to refresh every N s)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -107,19 +108,40 @@ def pgn_balance(pgn_dir: Path, cap: int = PGN_SCAN_CAP) -> str | None:
     n = white + black + draw
     if n == 0:
         return None
+    # Length trend: compare newer half vs older half
+    half = max(1, len(lengths) // 2)
+    newer_avg = (
+        sum(lengths[:half]) / half
+    )  # files sorted by mtime desc, so [:half] = newer
+    older_avg = (
+        sum(lengths[half:]) / (len(lengths) - half)
+        if len(lengths) > half
+        else newer_avg
+    )
+    diff = newer_avg - older_avg
+    arrow = "↑" if diff > 3 else "↓" if diff < -3 else "→"
     lengths.sort()
     p50 = _percentile(lengths, 0.50)
     p95 = _percentile(lengths, 0.95)
-    trunc = f"  \033[33m[scanned newest {cap} of {len(files)} pgns]\033[0m" if truncated else ""
-    return (f"balance:    White {100 * white / n:.0f}% / Black {100 * black / n:.0f}% / "
-            f"draw {100 * draw / n:.0f}%  | len p50={p50} p95={p95} ({n} games){trunc}")
+    trunc = (
+        f"  \033[33m[scanned newest {cap} of {len(files)} pgns]\033[0m"
+        if truncated
+        else ""
+    )
+    return (
+        f"balance:    White {100 * white / n:.0f}% / Black {100 * black / n:.0f}% / "
+        f"draw {100 * draw / n:.0f}%  | len p50={p50} p95={p95} "
+        f"{arrow} {diff:+.1f} ({n} games){trunc}"
+    )
 
 
 def _proc_args(needle: str) -> list[str] | None:
     """argv of the first running process whose cmdline contains `needle`. Uses
     `ps` (portable: macOS `pgrep` has no `-a`/full-cmdline-listing flag)."""
     try:
-        out = subprocess.run(["ps", "-axo", "args="], capture_output=True, text=True).stdout
+        out = subprocess.run(
+            ["ps", "-axo", "args="], capture_output=True, text=True
+        ).stdout
     except FileNotFoundError:
         return None
     for line in out.splitlines():
@@ -144,7 +166,9 @@ def _age(mtime: float) -> str:
     return f"{s}s ago" if s < 90 else f"{s // 60}m{s % 60:02d}s ago"
 
 
-def snapshot(games_dir: Path, run_dir: Path, db_path: Path, pgn_dir: Path | None = None) -> str:
+def snapshot(
+    games_dir: Path, run_dir: Path, db_path: Path, pgn_dir: Path | None = None
+) -> str:
     L: list[str] = []
     server = _proc_args("cc-server")
     bridge = _proc_args("trainer_bridge.py")
@@ -153,8 +177,10 @@ def snapshot(games_dir: Path, run_dir: Path, db_path: Path, pgn_dir: Path | None
     def updown(p):
         return "\033[32mUP\033[0m" if p else "\033[31mDOWN\033[0m"
 
-    L.append(f"processes:  server {updown(server)}   bridge {updown(bridge)}   "
-             f"trainer {updown(trainer)}")
+    L.append(
+        f"processes:  server {updown(server)}   bridge {updown(bridge)}   "
+        f"trainer {updown(trainer)}"
+    )
 
     # live config from the trainer's own args (falls back to known defaults)
     min_buffer = int(_flag(trainer, "--min-buffer", 2000))
@@ -166,7 +192,11 @@ def snapshot(games_dir: Path, run_dir: Path, db_path: Path, pgn_dir: Path | None
     arch = _flag(trainer, "--arch-version", "?")
 
     # games + positions produced
-    chunks = sorted(games_dir.glob("training.*.gz")) if games_dir.exists() else []
+    chunks = (
+        sorted(games_dir.glob("training.*.gz"), key=lambda p: int(p.stem.split(".")[1]))
+        if games_dir.exists()
+        else []
+    )
     positions = 0
     for f in chunks:
         try:
@@ -185,20 +215,26 @@ def snapshot(games_dir: Path, run_dir: Path, db_path: Path, pgn_dir: Path | None
 
     # cold-start gate
     if positions >= min_buffer:
-        L.append(f"cold start: \033[32mCLEARED\033[0m  ({positions} >= min-buffer {min_buffer}) "
-                 f"— SGD running")
+        L.append(
+            f"cold start: \033[32mCLEARED\033[0m  ({positions} >= min-buffer {min_buffer}) "
+            f"— SGD running"
+        )
     else:
         pct = 100 * positions / min_buffer if min_buffer else 0
-        L.append(f"cold start: \033[33mWAITING\033[0m  {positions}/{min_buffer} "
-                 f"({pct:.0f}%, {min_buffer - positions} short) — no SGD until cleared")
+        L.append(
+            f"cold start: \033[33mWAITING\033[0m  {positions}/{min_buffer} "
+            f"({pct:.0f}%, {min_buffer - positions} short) — no SGD until cleared"
+        )
 
     # trainer heartbeat (Phase 0 stats file) — the rates you tune cadence from
     stats_f = run_dir / "train_stats.json"
     try:
         st = json.loads(stats_f.read_text())
-        L.append(f"trainer:    step {st['steps']} | {st['steps_per_s']:.1f} steps/s "
-                 f"{st['games_per_s']:.3f} games/s | lr={st['lr']:.2e} "
-                 f"(stats {_age(st['updated'])})")
+        L.append(
+            f"trainer:    step {st['steps']} | {st['steps_per_s']:.1f} steps/s "
+            f"{st['games_per_s']:.3f} games/s | lr={st['lr']:.2e} "
+            f"(stats {_age(st['updated'])})"
+        )
         # reuse balance: are games generated faster than the trainer trains on them?
         # trained positions/s = steps/s * batch ; generated positions/s = games/s * pos-per-game.
         # actual reuse = trained/generated, compared to the configured --replay-factor target.
@@ -219,12 +255,18 @@ def snapshot(games_dir: Path, run_dir: Path, db_path: Path, pgn_dir: Path | None
                 tag = "\033[33mLAGGING\033[0m (below replay target — some games under-trained)"
             else:
                 tag = "\033[31mFALLING BEHIND\033[0m (generating games far faster than trained)"
-            L.append(f"throughput: train {trained_pps:.0f} pos/s  vs  gen {gen_pps:.0f} pos/s "
-                     f"({pos_per_game:.0f} pos/game)")
-            L.append(f"reuse:      {reuse:.1f}x actual  vs  {replay_factor:.0f}x target "
-                     f"(--replay-factor) — {tag}")
+            L.append(
+                f"throughput: train {trained_pps:.0f} pos/s  vs  gen {gen_pps:.0f} pos/s "
+                f"({pos_per_game:.0f} pos/game)"
+            )
+            L.append(
+                f"reuse:      {reuse:.1f}x actual  vs  {replay_factor:.0f}x target "
+                f"(--replay-factor) — {tag}"
+            )
     except (OSError, ValueError, KeyError):
-        L.append("trainer:    (no train_stats.json yet — SGD not started / pre-Phase0 trainer)")
+        L.append(
+            "trainer:    (no train_stats.json yet — SGD not started / pre-Phase0 trainer)"
+        )
 
     # publishing
     wbin = run_dir / "weights.bin"
@@ -245,7 +287,8 @@ def snapshot(games_dir: Path, run_dir: Path, db_path: Path, pgn_dir: Path | None
         dbgames = con.execute("select count(*) from training_games").fetchone()[0]
         best = con.execute(
             "select n.network_number, substr(n.sha,1,12) "
-            "from training_runs t join networks n on n.id = t.best_network_id").fetchone()
+            "from training_runs t join networks n on n.id = t.best_network_id"
+        ).fetchone()
         # Arenas were removed (every uploaded net auto-promotes; see uploadNetwork).
         # No new matches are created, so the only matches with done=0 are LEGACY
         # leftovers — and any open match still starves self-play (nextGame). Surface
@@ -254,16 +297,21 @@ def snapshot(games_dir: Path, run_dir: Path, db_path: Path, pgn_dir: Path | None
             "select c.network_number, b.network_number, m.wins, m.losses, m.draws, m.game_cap "
             "from matches m join networks c on c.id = m.candidate_id "
             "join networks b on b.id = m.current_best_id where m.done = 0 "
-            "order by m.id desc limit 1").fetchone()
+            "order by m.id desc limit 1"
+        ).fetchone()
         con.close()
         if best:
             num, sha = best
-            L.append(f"best net:   #{num} (sha {sha}…) \033[2m<- clients run this; auto-promoted (arenas removed)\033[0m")
+            L.append(
+                f"best net:   #{num} (sha {sha}…) \033[2m<- clients run this; auto-promoted (arenas removed)\033[0m"
+            )
         if m:
             cnum, bnum, w, l, d, cap = m
             played = w + l + d
-            L.append(f"\033[31mmatches:    LEGACY open match #{cnum} vs #{bnum} ({played}/{cap}) — "
-                     f"starving self-play; close it: UPDATE matches SET done=1 WHERE done=0\033[0m")
+            L.append(
+                f"\033[31mmatches:    LEGACY open match #{cnum} vs #{bnum} ({played}/{cap}) — "
+                f"starving self-play; close it: UPDATE matches SET done=1 WHERE done=0\033[0m"
+            )
         else:
             L.append("matches:    none (arenas removed — every net auto-promotes)")
         L.append(f"server db:  {nets} networks, {dbgames} games recorded")
@@ -282,7 +330,9 @@ def main() -> int:
     ap.add_argument("--run-dir", default="")
     ap.add_argument("--pgn-dir", default="")
     ap.add_argument("--db", default=str(REPO / "chessckers.db"))
-    ap.add_argument("--loop", type=float, default=0.0, help="refresh every N seconds (0 = once)")
+    ap.add_argument(
+        "--loop", type=float, default=0.0, help="refresh every N seconds (0 = once)"
+    )
     args = ap.parse_args()
 
     games_dir = Path(args.games_dir or REPO / f"games/run{args.training_id}")
@@ -294,8 +344,10 @@ def main() -> int:
         snap = snapshot(games_dir, run_dir, db_path, pgn_dir)
         if args.loop:
             print("\033[2J\033[H", end="")  # clear screen + home cursor
-            print(f"=== chessckers fleet status (run {args.training_id}) "
-                  f"{time.strftime('%H:%M:%S')} ===")
+            print(
+                f"=== chessckers fleet status (run {args.training_id}) "
+                f"{time.strftime('%H:%M:%S')} ==="
+            )
         print(snap)
         if not args.loop:
             return 0
