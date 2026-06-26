@@ -44,7 +44,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 SERVER_SRC="$(pwd)"
-ENGINE_SRC="${ENGINE_SRC:-$(cd .. && pwd)/engine}"
+ENGINE_SRC="${ENGINE_SRC:-$(cd .. && pwd)/chessckers/engine}"  # engine is nested in chessckers/; fleet repos are its siblings
 
 VAST_HOST="${VAST_HOST:?set VAST_HOST (e.g. sshN.vast.ai) -- get it from: vastai ssh-url <id>}"
 VAST_PORT="${VAST_PORT:?set VAST_PORT (the ssh port from vastai ssh-url <id>)}"
