@@ -131,55 +131,64 @@ def main() -> int:
     p.add_argument("--training-id", type=int, default=1)
     p.add_argument("--poll-seconds", type=float, default=5.0)
     p.add_argument("--base", default="", help="warm-start checkpoint for the trainer (.pt)")
-    p.add_argument("--publish-seconds", type=float, default=45.0,
+    # --- PASS-THROUGH hyperparameters (default=None) ---------------------------
+    # The bridge does not consume any of these; it only forwards each to
+    # train_continuous (see the cmd construction below). default=None means
+    # "not specified here" → the flag is omitted and train_continuous's OWN
+    # default applies. This keeps train_continuous the SINGLE source of truth for
+    # every default and removes the silent-drift footgun (a stale default here
+    # silently overriding the intended value). launch_trainer.sh still passes all
+    # of these explicitly, so the normal path is unchanged.
+    p.add_argument("--publish-seconds", type=float, default=None,
                    help="trainer weights.bin publish cadence FLOOR (0 = off; prefer step/game triggers)")
     # Phase 1: progress-based publish triggers (passed straight to train_continuous).
-    p.add_argument("--publish-steps", type=int, default=0,
+    p.add_argument("--publish-steps", type=int, default=None,
                    help="publish after this many SGD steps since the last publish (0 = off)")
-    p.add_argument("--publish-games", type=int, default=0,
+    p.add_argument("--publish-games", type=int, default=None,
                    help="publish after this many games ingested since the last publish (0 = off)")
     # Phase 2: lc0-style generational training.
-    p.add_argument("--window-games", type=int, default=0,
+    p.add_argument("--window-games", type=int, default=None,
                    help="cap the replay window to the last N games (0 = use --buffer-cap positions). "
                         "With --window-games-min set, this is the ramp CEILING.")
-    p.add_argument("--window-games-min", type=int, default=0,
+    p.add_argument("--window-games-min", type=int, default=None,
                    help="lc0/KataGo growing window: ramp the window from this many games up to "
                         "--window-games as self-play accumulates (0 = fixed window, no ramp)")
-    p.add_argument("--window-ramp-alpha", type=float, default=0.75,
+    p.add_argument("--window-ramp-alpha", type=float, default=None,
                    help="growth exponent for the window ramp (KataGo default 0.75; lower = slower)")
-    p.add_argument("--lr", type=float, default=2e-2,
-                   help="base LR (SGD-scale; train_continuous uses SGD+Nesterov)")
-    p.add_argument("--lr-warmup-steps", type=int, default=0)
-    p.add_argument("--lr-decay-steps", type=int, default=0)
-    p.add_argument("--lr-gamma", type=float, default=0.5)
-    p.add_argument("--ema-decay", type=float, default=0.0,
+    p.add_argument("--lr", type=float, default=None,
+                   help="Adam base learning rate (train_continuous uses Adam)")
+    p.add_argument("--lr-warmup-steps", type=int, default=None)
+    p.add_argument("--lr-decay-steps", type=int, default=None)
+    p.add_argument("--lr-gamma", type=float, default=None)
+    p.add_argument("--ema-decay", type=float, default=None,
                    help="publish an EMA of the weights (lc0-SWA analog); 0 = raw weights")
-    p.add_argument("--buffer-cap", type=int, default=50000)
-    p.add_argument("--batch-size", type=int, default=256)
-    p.add_argument("--min-buffer", type=int, default=2000)
-    p.add_argument("--buffer-snapshot-seconds", type=float, default=0.0,
+    p.add_argument("--buffer-cap", type=int, default=None)
+    p.add_argument("--batch-size", type=int, default=None)
+    p.add_argument("--min-buffer", type=int, default=None)
+    p.add_argument("--buffer-snapshot-seconds", type=float, default=None,
                    help="also snapshot the replay buffer every N s for crash safety (0 = "
                         "shutdown-only; the clean-shutdown snapshot is always written)")
-    p.add_argument("--replay-factor", type=float, default=8.0,
+    p.add_argument("--replay-factor", type=float, default=None,
                    help="cap total samples at this x positions-ingested. Raise when the "
                         "trainer is generation-bound (idle waiting on self-play) to take "
                         "more SGD steps on existing games; 0 = unthrottled")
-    p.add_argument("--value-discount", type=float, default=1.0,
+    p.add_argument("--value-discount", type=float, default=None,
                    help="per-ply WDL value discount gamma (<1 incentivizes faster wins); 1.0 = off")
-    p.add_argument("--value-q-ratio", type=float, default=0.0,
+    p.add_argument("--value-q-ratio", type=float, default=None,
                    help="blend the search root value q into the value target: (1-r)*z + r*q "
                         "(needs lc0-fork chunks carrying search_wdl); 0.0 = off (pure outcome z)")
-    # NN architecture handed to the trainer. MUST be v2: akshay-chessckers-0
+    # NN architecture handed to the trainer. MUST be v2+ : akshay-chessckers-0
     # encodes 16 position planes (the v2 representation); a v1 net has a
     # 15-channel input conv, so the engine reads 16 planes into a 15-channel
     # weight and SIGTRAPs on the first eval. v1 nets are NOT engine-loadable.
-    p.add_argument("--arch-version", choices=["v1", "v2", "v4", "v5"], default="v2")
-    p.add_argument("--c-filters", type=int, default=96)
-    p.add_argument("--n-blocks", type=int, default=4)
-    p.add_argument("--d-hidden", type=int, default=256)
-    p.add_argument("--tf-blocks", type=int, default=0,
+    # (train_continuous now defaults to v2 too, so the omit-path is also safe.)
+    p.add_argument("--arch-version", choices=["v1", "v2", "v4", "v5"], default=None)
+    p.add_argument("--c-filters", type=int, default=None)
+    p.add_argument("--n-blocks", type=int, default=None)
+    p.add_argument("--d-hidden", type=int, default=None)
+    p.add_argument("--tf-blocks", type=int, default=None,
                    help="v2/v4 transformer blocks interleaved into the trunk (0 = pure ResNet)")
-    p.add_argument("--se-ratio", type=int, default=8,
+    p.add_argument("--se-ratio", type=int, default=None,
                    help="v4: Squeeze-Excitation reduction ratio")
     p.add_argument("--no-trainer", action="store_true",
                    help="do NOT spawn train_continuous (assume it runs elsewhere); just feed+upload")
@@ -218,31 +227,38 @@ def main() -> int:
     if not args.no_trainer:
         cmd = [python, "-m", "chessckers_engine.train_continuous",
                "--run-dir", str(run_dir),
-               "--arch-version", args.arch_version,
-               "--c-filters", str(args.c_filters),
-               "--n-blocks", str(args.n_blocks),
-               "--d-hidden", str(args.d_hidden),
-               "--tf-blocks", str(args.tf_blocks),
-               "--se-ratio", str(args.se_ratio),
-               "--buffer-cap", str(args.buffer_cap),
-               "--batch-size", str(args.batch_size),
-               "--min-buffer", str(args.min_buffer),
-               "--buffer-snapshot-seconds", str(args.buffer_snapshot_seconds),
-               "--replay-factor", str(args.replay_factor),
-               "--value-discount", str(args.value_discount),
-               "--value-q-ratio", str(args.value_q_ratio),
-               "--publish-seconds", str(args.publish_seconds),
-               "--publish-steps", str(args.publish_steps),
-               "--publish-games", str(args.publish_games),
-               "--window-games", str(args.window_games),
-               "--window-games-min", str(args.window_games_min),
-               "--window-ramp-alpha", str(args.window_ramp_alpha),
-               "--lr", str(args.lr),
-               "--lr-warmup-steps", str(args.lr_warmup_steps),
-               "--lr-decay-steps", str(args.lr_decay_steps),
-               "--lr-gamma", str(args.lr_gamma),
-               "--ema-decay", str(args.ema_decay),
                "--ckpt-seconds", "300"]
+        # Forward each pass-through hyperparam ONLY when it was explicitly given
+        # (not None); otherwise train_continuous's own default stands. Single
+        # source of truth = train_continuous's argparse.
+        for flag, val in (
+            ("--arch-version", args.arch_version),
+            ("--c-filters", args.c_filters),
+            ("--n-blocks", args.n_blocks),
+            ("--d-hidden", args.d_hidden),
+            ("--tf-blocks", args.tf_blocks),
+            ("--se-ratio", args.se_ratio),
+            ("--buffer-cap", args.buffer_cap),
+            ("--batch-size", args.batch_size),
+            ("--min-buffer", args.min_buffer),
+            ("--buffer-snapshot-seconds", args.buffer_snapshot_seconds),
+            ("--replay-factor", args.replay_factor),
+            ("--value-discount", args.value_discount),
+            ("--value-q-ratio", args.value_q_ratio),
+            ("--publish-seconds", args.publish_seconds),
+            ("--publish-steps", args.publish_steps),
+            ("--publish-games", args.publish_games),
+            ("--window-games", args.window_games),
+            ("--window-games-min", args.window_games_min),
+            ("--window-ramp-alpha", args.window_ramp_alpha),
+            ("--lr", args.lr),
+            ("--lr-warmup-steps", args.lr_warmup_steps),
+            ("--lr-decay-steps", args.lr_decay_steps),
+            ("--lr-gamma", args.lr_gamma),
+            ("--ema-decay", args.ema_decay),
+        ):
+            if val is not None:
+                cmd += [flag, str(val)]
         if args.base:
             cmd += ["--base", args.base]
         print(f"[bridge] starting trainer: {' '.join(cmd)}", flush=True)
