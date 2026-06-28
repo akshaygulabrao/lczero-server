@@ -482,25 +482,39 @@ func uploadNetwork(c *gin.Context) {
 		}
 	}
 
-	// Arena removed (AlphaZero-final / modern-lc0 policy): every uploaded network
-	// is promoted to best immediately, with NO promotion or regression matches.
-	// On a small fleet any open match starves self-play (nextGame hands every
-	// client a match game until the match closes), so gating cost more throughput
-	// than the −20 Elo "not-regression" guard was worth. Strength is now tracked
-	// out-of-band (watch_game / offline matches), not by in-fleet arenas.
+	// In-fleet promotion gate (lc0-style; re-enabled for run 8). The first net
+	// (no current best) is promoted directly — there is nothing to gate against.
+	// Otherwise queue a candidate-vs-best match; checkMatchFinished promotes iff
+	// calcElo(W,L,D) > Matches.Threshold. target_slice 0 so ANY client on a small
+	// fleet plays it (slices 1-3 would starve a 1-node fleet). Self-play pauses
+	// while the match runs — the deliberate cost of gating.
 	//
-	// This also subsumes the old bootstrap special-case: with auto-promote the
-	// first upload (no current best) simply sets itself as best like any other.
-	if err := db.GetDB().Model(&db.TrainingRun{}).Where("id = ?", trainingRun.ID).Update("best_network_id", network.ID).Error; err != nil {
+	// NOTE: this is the basic candidate-vs-best gate. A regression panel (also
+	// playing the candidate vs past champions and requiring no-regress on each)
+	// is a planned follow-on, not yet wired.
+	if trainingRun.BestNetworkID == 0 {
+		if err := db.GetDB().Model(&db.TrainingRun{}).Where("id = ?", trainingRun.ID).Update("best_network_id", network.ID).Error; err != nil {
+			log.Println(err)
+			c.String(500, "Internal error")
+			return
+		}
+		log.Printf("[gate] net id=%d sha=%s promoted to best (bootstrap; no prior best) (run %d)", network.ID, network.Sha, trainingRun.ID)
+		c.String(http.StatusOK, fmt.Sprintf("Network %s uploaded and promoted (bootstrap).", network.Sha))
+		return
+	}
+	matchParams, err := json.Marshal(config.Config.Matches.Parameters)
+	if err != nil {
 		log.Println(err)
 		c.String(500, "Internal error")
 		return
 	}
-	// Net promotions are otherwise invisible in the server log (only in the HTTP
-	// body the bridge sees), and with arenas removed every upload promotes — this
-	// is the one signal that the train→promote loop is alive.
-	log.Printf("[promote] net id=%d sha=%s promoted to best (run %d)", network.ID, network.Sha, trainingRun.ID)
-	c.String(http.StatusOK, fmt.Sprintf("Network %s uploaded and promoted to best.", network.Sha))
+	if err := createMatch(trainingRun, 0, &network, false, string(matchParams)); err != nil {
+		log.Println(err)
+		c.String(500, "Internal error creating gate match")
+		return
+	}
+	log.Printf("[gate] net id=%d sha=%s queued for promotion match vs best id=%d (run %d)", network.ID, network.Sha, trainingRun.BestNetworkID, trainingRun.ID)
+	c.String(http.StatusOK, fmt.Sprintf("Network %s uploaded; promotion match created vs best.", network.Sha))
 }
 
 func checkEngineVersion(engineVersion string, username string, training_id uint) bool {
@@ -756,6 +770,13 @@ func checkMatchFinished(match_id uint) error {
 		if err != nil {
 			return err
 		}
+		verdict := "rejected (best unchanged)"
+		if passed {
+			verdict = "PROMOTED to best"
+		}
+		log.Printf("[gate] match %d done: cand id=%d vs best id=%d  %d-%d-%d (W-L-D)  calcElo=%.0f thr=%.0f -> %s",
+			match.ID, match.CandidateID, match.CurrentBestID, match.Wins, match.Losses, match.Draws,
+			calcElo(match.Wins, match.Losses, match.Draws), config.Config.Matches.Threshold, verdict)
 		if passed {
 			err = setBestNetwork(match.TrainingRunID, match.CandidateID)
 			if err != nil {
