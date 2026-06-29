@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import math
 import re
 import sqlite3
 import subprocess
@@ -29,6 +30,15 @@ REPO = Path(__file__).resolve().parent.parent  # lczero-server repo root
 # than silently sampling a subset.
 PGN_SCAN_CAP = 2000
 _MOVE_NUM_RE = re.compile(r"^\d+\.+$")  # PGN move-number tokens like "12." / "12..."
+
+
+def _elo(score: float) -> float:
+    """The in-fleet gate's calcElo: -400*log10(1/score - 1), capped ±800 (mirrors main.go)."""
+    if score <= 0.0:
+        return -800.0
+    if score >= 1.0:
+        return 800.0
+    return max(-800.0, min(800.0, -400.0 * math.log10(1.0 / score - 1.0)))
 
 
 def _percentile(sorted_vals: list[int], q: float) -> int:
@@ -221,11 +231,26 @@ def snapshot(
             "select n.network_number, substr(n.sha,1,12) "
             "from training_runs t join networks n on n.id = t.best_network_id"
         ).fetchone()
-        # Arenas were removed (every uploaded net auto-promotes; see uploadNetwork).
-        # No new matches are created, so the only matches with done=0 are LEGACY
-        # leftovers — and any open match still starves self-play (nextGame). Surface
-        # them as a warning to be closed, not as healthy "arena progress".
-        m = con.execute(
+        # In-fleet promotion gate is LIVE (re-enabled 2026-06-13): each uploaded
+        # candidate plays a fixed-N match vs the current best and is promoted only if
+        # calcElo > -20. Completed gate matches are rows in `matches` with done=1,
+        # test_only=0, deleted_at IS NULL (same filter `cc strength` reads). Surface
+        # the headline (total / promoted / last verdict) here; full table = cc strength.
+        gate = con.execute(
+            "select count(*), coalesce(sum(passed), 0) from matches "
+            "where done = 1 and test_only = 0 and deleted_at is null"
+        ).fetchone()
+        last = con.execute(
+            "select c.network_number, b.network_number, m.wins, m.losses, m.draws, m.passed "
+            "from matches m join networks c on c.id = m.candidate_id "
+            "join networks b on b.id = m.current_best_id "
+            "where m.done = 1 and m.test_only = 0 and m.deleted_at is null "
+            "order by m.id desc limit 1"
+        ).fetchone()
+        # An open match (done=0) is the gate match currently in progress for the
+        # latest candidate; only worth flagging because a *stuck* open match starves
+        # self-play (nextGame).
+        openm = con.execute(
             "select c.network_number, b.network_number, m.wins, m.losses, m.draws, m.game_cap "
             "from matches m join networks c on c.id = m.candidate_id "
             "join networks b on b.id = m.current_best_id where m.done = 0 "
@@ -235,17 +260,34 @@ def snapshot(
         if best:
             num, sha = best
             L.append(
-                f"best net:   #{num} (sha {sha}…) \033[2m<- clients run this; auto-promoted (arenas removed)\033[0m"
+                f"best net:   #{num} (sha {sha}…) \033[2m<- clients run this; promoted via in-fleet gate\033[0m"
             )
-        if m:
-            cnum, bnum, w, l, d, cap = m
+        gmatches, gpromoted = gate or (0, 0)
+        if gmatches:
+            if last:
+                cnum, bnum, w, l, d, passed = last
+                n = w + l + d
+                e = _elo((w + 0.5 * d) / n) if n else 0.0
+                verdict = "\033[32mPROMOTE\033[0m" if passed else "\033[31mREJECT\033[0m"
+                L.append(
+                    f"matches:    in-fleet gate: {gmatches} run, {gpromoted} promoted | "
+                    f"last #{cnum} vs #{bnum} {w}-{l}-{d} ({e:+.0f} Elo) {verdict} "
+                    f"\033[2m(full table: cc strength)\033[0m"
+                )
+            else:
+                L.append(
+                    f"matches:    in-fleet gate: {gmatches} run, {gpromoted} promoted "
+                    f"\033[2m(full table: cc strength)\033[0m"
+                )
+        else:
+            L.append("matches:    none yet (gate live; awaiting first candidate)")
+        if openm:
+            cnum, bnum, w, l, d, cap = openm
             played = w + l + d
             L.append(
-                f"\033[31mmatches:    LEGACY open match #{cnum} vs #{bnum} ({played}/{cap}) — "
-                f"starving self-play; close it: UPDATE matches SET done=1 WHERE done=0\033[0m"
+                f"\033[33m   gate match in progress: #{cnum} vs #{bnum} ({played}/{cap}) — "
+                f"if stalled it starves self-play (close: UPDATE matches SET done=1 WHERE done=0)\033[0m"
             )
-        else:
-            L.append("matches:    none (arenas removed — every net auto-promotes)")
         L.append(f"server db:  {nets} networks, {dbgames} games recorded")
     except Exception as e:  # noqa: BLE001
         L.append(f"server db:  (unreadable: {e})")
