@@ -4,9 +4,7 @@ actually need to answer "is it training yet / why no new net?":
 
   - processes:   server / trainer_bridge / train_continuous up or down
   - games:       chunk count + total positions produced (server games dir)
-  - cold start:  positions vs the LIVE --min-buffer (read from the trainer's
-                 args) — the threshold below which the trainer takes NO SGD step
-  - publishing:  weights.bin mtime (= last net published) vs --publish-seconds
+  - publishing:  weights.bin mtime (= last net published)
   - networks:    how many nets the server has (DB), + last upload time
 
 Run from anywhere:  scripts/fleet_status.py   (add --loop N to refresh every N s)
@@ -150,17 +148,6 @@ def _proc_args(needle: str) -> list[str] | None:
     return None
 
 
-def _flag(argv: list[str] | None, name: str, default):
-    if not argv:
-        return default
-    for i, a in enumerate(argv):
-        if a == name and i + 1 < len(argv):
-            return argv[i + 1]
-        if a.startswith(name + "="):
-            return a.split("=", 1)[1]
-    return default
-
-
 def _age(mtime: float) -> str:
     s = max(0, int(time.time() - mtime))
     return f"{s}s ago" if s < 90 else f"{s // 60}m{s % 60:02d}s ago"
@@ -181,15 +168,6 @@ def snapshot(
         f"processes:  server {updown(server)}   bridge {updown(bridge)}   "
         f"trainer {updown(trainer)}"
     )
-
-    # live config from the trainer's own args (falls back to known defaults)
-    min_buffer = int(_flag(trainer, "--min-buffer", 2000))
-    publish_s = float(_flag(trainer, "--publish-seconds", 45.0))
-    batch = int(_flag(trainer, "--batch-size", 1024))
-    replay_factor = float(_flag(trainer, "--replay-factor", 8.0))
-    tf_blocks = _flag(trainer, "--tf-blocks", "?")
-    se_ratio = _flag(trainer, "--se-ratio", "?")
-    arch = _flag(trainer, "--arch-version", "?")
 
     # games + positions produced
     chunks = (
@@ -213,70 +191,24 @@ def snapshot(
         if bal:
             L.append(bal)
 
-    # cold-start gate
-    if positions >= min_buffer:
-        L.append(
-            f"cold start: \033[32mCLEARED\033[0m  ({positions} >= min-buffer {min_buffer}) "
-            f"— SGD running"
-        )
-    else:
-        pct = 100 * positions / min_buffer if min_buffer else 0
-        L.append(
-            f"cold start: \033[33mWAITING\033[0m  {positions}/{min_buffer} "
-            f"({pct:.0f}%, {min_buffer - positions} short) — no SGD until cleared"
-        )
-
     # trainer heartbeat (Phase 0 stats file) — the rates you tune cadence from
     stats_f = run_dir / "train_stats.json"
     try:
         st = json.loads(stats_f.read_text())
         L.append(
             f"trainer:    step {st['steps']} | {st['steps_per_s']:.1f} steps/s "
-            f"{st['games_per_s']:.3f} games/s | lr={st['lr']:.2e} "
-            f"(stats {_age(st['updated'])})"
+            f"{st['games_per_s']:.3f} games/s (stats {_age(st['updated'])})"
         )
-        # reuse balance: are games generated faster than the trainer trains on them?
-        # trained positions/s = steps/s * batch ; generated positions/s = games/s * pos-per-game.
-        # actual reuse = trained/generated, compared to the configured --replay-factor target.
-        # (replay-factor THROTTLES steps at replay_factor x positions_ingested, so target is
-        # the ceiling the trainer aims for; actual << target => trainer can't keep up.)
-        gps = st.get("games_per_s") or 0.0
-        sps = st.get("steps_per_s") or 0.0
-        pos_ing = st.get("positions_ingested") or 0
-        games_seen = st.get("games_seen") or 0
-        pos_per_game = (pos_ing / games_seen) if games_seen else 0.0
-        trained_pps = sps * batch
-        gen_pps = gps * pos_per_game
-        reuse = (trained_pps / gen_pps) if gen_pps else 0.0
-        if replay_factor and reuse:
-            if reuse >= 0.85 * replay_factor:
-                tag = "\033[32mKEEPING UP\033[0m (trainer at/above target; may be over-generating)"
-            elif reuse >= 0.5 * replay_factor:
-                tag = "\033[33mLAGGING\033[0m (below replay target — some games under-trained)"
-            else:
-                tag = "\033[31mFALLING BEHIND\033[0m (generating games far faster than trained)"
-            L.append(
-                f"throughput: train {trained_pps:.0f} pos/s  vs  gen {gen_pps:.0f} pos/s "
-                f"({pos_per_game:.0f} pos/game)"
-            )
-            L.append(
-                f"reuse:      {reuse:.1f}x actual  vs  {replay_factor:.0f}x target "
-                f"(--replay-factor) — {tag}"
-            )
     except (OSError, ValueError, KeyError):
         L.append(
-            "trainer:    (no train_stats.json yet — SGD not started / pre-Phase0 trainer)"
+            "trainer:    (no train_stats.json yet — training not started / pre-Phase0 trainer)"
         )
 
     # publishing
     wbin = run_dir / "weights.bin"
     if wbin.exists():
         age = _age(wbin.stat().st_mtime)
-        # progress-gated publishing means time-staleness isn't meaningful unless a
-        # time floor is set; only warn when --publish-seconds is the active trigger.
-        stale = publish_s > 0 and (time.time() - wbin.stat().st_mtime) > 3 * publish_s
-        warn = "  \033[33m(stale — trainer not publishing)\033[0m" if stale else ""
-        L.append(f"last net:   weights.bin published {age}{warn}")
+        L.append(f"last net:   weights.bin published {age}")
     else:
         L.append("last net:   weights.bin MISSING (no publish yet)")
 
@@ -318,8 +250,6 @@ def snapshot(
     except Exception as e:  # noqa: BLE001
         L.append(f"server db:  (unreadable: {e})")
 
-    se_desc = f"SE(r{se_ratio})" if arch == "v4" else f"tf-blocks {tf_blocks}"
-    L.append(f"arch:       {arch} ({se_desc})")
     return "\n".join(L)
 
 
