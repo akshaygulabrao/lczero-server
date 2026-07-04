@@ -177,6 +177,10 @@ def main() -> int:
     p.add_argument("--value-q-ratio", type=float, default=None,
                    help="blend the search root value q into the value target: (1-r)*z + r*q "
                         "(needs lc0-fork chunks carrying search_wdl); 0.0 = off (pure outcome z)")
+    p.add_argument("--policy-target", choices=["visits", "improved"], default=None,
+                   help="policy training target: normalized visit counts (visits, the AZ "
+                        "default) or the Gumbel improved policy (improved; needs lc0-fork "
+                        "chunks carrying improved_policy, falls back per-example)")
     # NN architecture handed to the trainer. MUST be v2+ : akshay-chessckers-0
     # encodes 16 position planes (the v2 representation); a v1 net has a
     # 15-channel input conv, so the engine reads 16 planes into a 15-channel
@@ -245,6 +249,7 @@ def main() -> int:
             ("--replay-factor", args.replay_factor),
             ("--value-discount", args.value_discount),
             ("--value-q-ratio", args.value_q_ratio),
+            ("--policy-target", args.policy_target),
             ("--publish-seconds", args.publish_seconds),
             ("--publish-steps", args.publish_steps),
             ("--publish-games", args.publish_games),
