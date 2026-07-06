@@ -179,6 +179,29 @@ def snapshot(
         f"trainer {updown(trainer)}"
     )
 
+    # Run identity: training_run id + description + games dir + gate threshold
+    try:
+        _rcon = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        _run_row = _rcon.execute(
+            "SELECT id, description FROM training_runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        _rcon.close()
+        if _run_row:
+            _rid, _rdesc = _run_row
+            _games_base = games_dir.name
+            _thr_seg = ""
+            try:
+                _cfg = json.loads((REPO / "serverconfig.json").read_text())
+                _thr = _cfg.get("matches", {}).get("threshold")
+                if _thr is not None:
+                    _thr_val = int(_thr) if _thr == int(_thr) else _thr
+                    _thr_seg = f" | gate thr {_thr_val}"
+            except Exception:  # noqa: BLE001
+                pass
+            L.append(f'run:        #{_rid} "{_rdesc}" | games dir {_games_base}{_thr_seg}')
+    except Exception:  # noqa: BLE001
+        pass
+
     # games + positions produced
     chunks = (
         sorted(games_dir.glob("training.*.gz"), key=lambda p: int(p.stem.split(".")[1]))
