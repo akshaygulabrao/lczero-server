@@ -118,8 +118,16 @@ ssh_box "cd '$REMOTE_DIR/lczero-server' && \
 echo "[provision] (3/5) rsync engine + uv sync (CUDA torch)..."
 rsync_box --delete \
   --exclude '.venv/' --exclude '__pycache__/' --exclude '.pytest_cache/' --exclude '*.pyc' \
+  --exclude 'weights/' \
   "$ENGINE_SRC/" "$VAST_USER@$VAST_HOST:$REMOTE_DIR/engine/"
-ssh_box "cd '$REMOTE_DIR/engine' && PATH=\$HOME/.local/bin:\$PATH uv sync && \
+# NOT `uv sync`: the lock resolves PyPI torch (cu13x wheels — CPU-only on the 12.8-driver
+# hosts) and the multi-GB download has stalled outright on some vast hosts. Reuse the
+# template's working CUDA torch (/venv/main) via --system-site-packages and pip only the
+# small pure-python deps.
+ssh_box "cd '$REMOTE_DIR/engine' && rm -rf .venv && \
+  /venv/main/bin/python -m venv --system-site-packages .venv && \
+  .venv/bin/pip install -q --no-deps -e . && \
+  .venv/bin/pip install -q httpx 'chess>=1.10' 'wandb>=0.17' 'numpy>=1.26' && \
   .venv/bin/python -c 'import torch; print(\"[provision]   torch\", torch.__version__, \"cuda=\", torch.cuda.is_available())'"
 
 # 4. Seed live state (continue the run) -- the trainer warm-resumes from these.
