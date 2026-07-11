@@ -18,6 +18,11 @@
     "parameters": ["--visits=128", "--temperature=1.0", "--tempdecay-moves=10", "--temp-visit-offset=-0.8"],
     "threshold": -9999.0
   },
+  "league": {
+    "enabled": true,
+    "fraction": 0.2,
+    "poolSize": 8
+  },
   "webserver": {
     "address": ":9830"
   }

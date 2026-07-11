@@ -279,6 +279,24 @@ def snapshot(
             "join networks b on b.id = m.current_best_id where m.done = 0 "
             "order by m.id desc limit 1"
         ).fetchone()
+        # League self-play: games played vs a past-champion opponent
+        # (opponent_network_id > 0). Nested try: a pre-migration DB has no
+        # such column — skip silently without losing the other lines.
+        league = None
+        try:
+            ltot = con.execute(
+                "select count(*) from training_games where opponent_network_id > 0"
+            ).fetchone()[0]
+            # datetime(created_at) normalizes GORM's offset-suffixed local
+            # timestamps to UTC — a bare lexical compare vs datetime('now')
+            # yields an empty window on any non-UTC host.
+            lhour, ltot_1h = con.execute(
+                "select sum(case when opponent_network_id > 0 then 1 else 0 end), count(*) "
+                "from training_games where datetime(created_at) >= datetime('now','-1 hour')"
+            ).fetchone()
+            league = (ltot, lhour or 0, ltot_1h)
+        except sqlite3.OperationalError:
+            pass
         con.close()
         if best:
             num, sha = best
@@ -312,6 +330,11 @@ def snapshot(
                 f"if stalled it starves self-play (close: UPDATE matches SET done=1 WHERE done=0)\033[0m"
             )
         L.append(f"server db:  {nets} networks, {dbgames} games recorded")
+        if league and league[0]:
+            ltot, lhour, ltot_1h = league
+            L.append(
+                f"league:     {ltot} games vs past champions | last 1h {lhour}/{ltot_1h}"
+            )
     except Exception as e:  # noqa: BLE001
         L.append(f"server db:  (unreadable: {e})")
 

@@ -209,6 +209,12 @@ func nextGame(c *gin.Context) {
 			"bookUrl":    trainingRun.TrainBook,
 			"keepTime":   "16h",
 		}
+		if config.Config.League.Enabled {
+			if pool := leaguePoolShas(&trainingRun); len(pool) > 0 {
+				result["leaguePool"] = pool
+				result["leagueFraction"] = config.Config.League.Fraction
+			}
+		}
 		c.JSON(http.StatusOK, result)
 	}
 }
@@ -281,6 +287,56 @@ func createMatch(trainingRun *db.TrainingRun, targetSlice int, network *db.Netwo
 		match.TestOnly = true
 	}
 	return db.GetDB().Create(&match).Error
+}
+
+// leaguePoolShas returns the league opponent pool: shas of past champions at
+// log-spaced distances (1,2,4,8,... promotions ago), newest first, excluding
+// the current best, deduped, capped at League.PoolSize. Champions are
+// reconstructed from passed promotion matches (checkMatchFinished promotes
+// match.CandidateID). Depends ONLY on the matches table + BestNetworkID +
+// static config — never on token/user — so the response is STABLE between
+// promotions (clients restart the engine whenever next_game changes).
+func leaguePoolShas(run *db.TrainingRun) []string {
+	var champs []db.Match
+	err := db.GetDB().Select("candidate_id").
+		Where("done = ? AND passed = ? AND test_only = ? AND training_run_id = ?",
+			true, true, false, run.ID).
+		Order("id desc").Find(&champs).Error
+	if err != nil {
+		log.Println(err)
+		return nil
+	}
+	poolSize := config.Config.League.PoolSize
+	if poolSize <= 0 {
+		poolSize = 8
+	}
+	var ids []uint
+	seen := map[uint]bool{run.BestNetworkID: true}
+	for k := 1; k < len(champs) && len(ids) < poolSize; k *= 2 {
+		if id := champs[k].CandidateID; !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	var nets []db.Network
+	if err := db.GetDB().Where("id IN (?)", ids).Find(&nets).Error; err != nil {
+		log.Println(err)
+		return nil
+	}
+	shaByID := make(map[uint]string, len(nets))
+	for _, n := range nets {
+		shaByID[n.ID] = n.Sha
+	}
+	shas := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if s := shaByID[id]; s != "" {
+			shas = append(shas, s)
+		}
+	}
+	return shas
 }
 
 func uploadNetwork(c *gin.Context) {
@@ -617,6 +673,18 @@ func uploadGame(c *gin.Context) {
 		return
 	}
 
+	// League self-play: which past champion the learner played against.
+	opponentNetworkID := uint(0)
+	if oppSha := c.PostForm("opponent_sha"); oppSha != "" {
+		var opp db.Network
+		if err := db.GetDB().Where("sha = ?", oppSha).First(&opp).Error; err == nil {
+			opponentNetworkID = opp.ID
+		} else {
+			// Attribution is best-effort; never reject the training data.
+			log.Printf("upload_game: unknown opponent_sha %q", oppSha)
+		}
+	}
+
 	err = db.GetDB().Exec("UPDATE networks SET games_played = games_played + 1 WHERE id = ?", network_id).Error
 	if err != nil {
 		log.Println(err)
@@ -660,6 +728,7 @@ func uploadGame(c *gin.Context) {
 		EngineVersion:     c.PostForm("engineVersion"),
 		ResignFPThreshold: resign_fp_threshold,
 		GameNumber:        nextGameNumber,
+		OpponentNetworkID: opponentNetworkID,
 	}
 	err = db.GetDB().Create(&game).Error
 	if err != nil {

@@ -29,6 +29,11 @@ var Config struct {
 		Parameters []interface{}
 		Threshold  float64
 	}
+	League struct {
+		Enabled  bool
+		Fraction float64
+		PoolSize int
+	}
 	WebServer struct {
 		Address string
 	}

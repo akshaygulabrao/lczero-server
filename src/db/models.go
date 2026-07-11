@@ -136,6 +136,10 @@ type TrainingGame struct {
 	EngineVersion string
 
 	ResignFPThreshold float64
+
+	// Network the learner played against in a league game (0 = normal
+	// self-play; network IDs start at 1).
+	OpponentNetworkID uint `gorm:"index"`
 }
 
 type ServerData struct {
