@@ -198,7 +198,7 @@ def snapshot(
                     _thr_seg = f" | gate thr {_thr_val}"
             except Exception:  # noqa: BLE001
                 pass
-            L.append(f'run:        #{_rid} "{_rdesc}" | games dir {_games_base}{_thr_seg}')
+            L.append(f'run:        "{_rdesc}" (db #{_rid}, games dir {_games_base}){_thr_seg}')
     except Exception:  # noqa: BLE001
         pass
 
