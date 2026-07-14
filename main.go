@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/LeelaChessZero/lczero-server/src/config"
@@ -213,6 +214,11 @@ func nextGame(c *gin.Context) {
 			if pool := leaguePoolShas(&trainingRun); len(pool) > 0 {
 				result["leaguePool"] = pool
 				result["leagueFraction"] = config.Config.League.Fraction
+				if config.Config.League.Pfsp {
+					if probs := leaguePfspProbs(&trainingRun, pool); len(probs) == len(pool) {
+						result["leagueProbs"] = probs
+					}
+				}
 			}
 		}
 		c.JSON(http.StatusOK, result)
@@ -362,6 +368,128 @@ func leaguePoolShas(run *db.TrainingRun) []string {
 		}
 	}
 	return shas
+}
+
+// PFSP (prioritized fictitious self-play, AlphaStar-style): league opponent
+// sampling probabilities from live win rates. f_hard(wr) = (1-wr)^2
+// concentrates league games on the pool opponents the learner scores worst
+// against (the exploitable matchups RPS cycles hide in); an epsilon-uniform
+// floor keeps every opponent sampled enough that its win-rate estimate stays
+// fresh. Win rates are Laplace-smoothed toward 0.5, so an opponent without
+// recent result data samples like a 50% opponent.
+const (
+	pfspEpsilon = 0.2
+	pfspWindow  = 48 * time.Hour
+)
+
+type pfspStat struct {
+	games  int
+	points float64 // learner score: win=1, draw=0.5
+}
+
+// pfspProbs turns per-opponent stats into sampling probabilities aligned
+// with poolIDs. Pure (unit-tested). Rounded to 3 decimals so the /next_game
+// JSON stays byte-stable; the engine re-normalizes, so the rounded values
+// need not sum to exactly 1.
+func pfspProbs(poolIDs []uint, stats map[uint]pfspStat) []float64 {
+	n := len(poolIDs)
+	if n == 0 {
+		return nil
+	}
+	raw := make([]float64, n)
+	var sum float64
+	for i, id := range poolIDs {
+		s := stats[id]
+		wr := (s.points + 1) / (float64(s.games) + 2) // Laplace toward 0.5
+		raw[i] = (1 - wr) * (1 - wr)                  // f_hard, p=2
+		sum += raw[i]
+	}
+	// sum > 0 always: smoothing keeps wr < 1 strictly.
+	probs := make([]float64, n)
+	uniform := 1.0 / float64(n)
+	for i := range raw {
+		p := pfspEpsilon*uniform + (1-pfspEpsilon)*raw[i]/sum
+		probs[i] = math.Round(p*1000) / 1000
+	}
+	return probs
+}
+
+// leaguePfspProbs returns PFSP sampling probabilities aligned with poolShas.
+// Cached per (best network, pool): /next_game responses must stay byte-stable
+// between promotions (clients restart the engine whenever the response
+// changes), and a promotion restarts the engine anyway — so probabilities
+// refresh exactly then, at zero extra restarts.
+var (
+	pfspMu    sync.Mutex
+	pfspCache = map[string][]float64{}
+)
+
+func leaguePfspProbs(run *db.TrainingRun, poolShas []string) []float64 {
+	key := fmt.Sprintf("%d|%s", run.BestNetworkID, strings.Join(poolShas, ","))
+	pfspMu.Lock()
+	defer pfspMu.Unlock()
+	if probs, ok := pfspCache[key]; ok {
+		return probs
+	}
+	var nets []db.Network
+	if err := db.GetDB().Where("sha IN (?)", poolShas).Find(&nets).Error; err != nil {
+		log.Println(err)
+		return nil
+	}
+	idBySha := make(map[string]uint, len(nets))
+	for _, n := range nets {
+		idBySha[n.Sha] = n.ID
+	}
+	poolIDs := make([]uint, 0, len(poolShas))
+	for _, sha := range poolShas {
+		poolIDs = append(poolIDs, idBySha[sha])
+	}
+	// Learner score vs each pool opponent over the recent window. All recent
+	// league games count, not only the current best's: the learners of the
+	// window are the last few champions, which is the best available
+	// estimate for a freshly promoted best that just tied or beat them
+	// (filtering to the new best alone would reset to no data on every
+	// promotion).
+	type resultRow struct {
+		OpponentNetworkID uint
+		Result            int
+		LearnerIsBlack    bool
+		N                 int
+	}
+	var rows []resultRow
+	err := db.GetDB().Table("training_games").
+		Select("opponent_network_id, result, learner_is_black, count(*) as n").
+		Where("training_run_id = ? AND opponent_network_id IN (?) AND result > 0 AND created_at > ?",
+			run.ID, poolIDs, time.Now().Add(-pfspWindow)).
+		Group("opponent_network_id, result, learner_is_black").
+		Scan(&rows).Error
+	if err != nil {
+		log.Println(err)
+		return nil
+	}
+	stats := map[uint]pfspStat{}
+	for _, r := range rows {
+		s := stats[r.OpponentNetworkID]
+		s.games += r.N
+		switch {
+		case r.Result == 3: // draw
+			s.points += 0.5 * float64(r.N)
+		case (r.Result == 1) != r.LearnerIsBlack: // learner's color won
+			s.points += float64(r.N)
+		}
+		stats[r.OpponentNetworkID] = s
+	}
+	probs := pfspProbs(poolIDs, stats)
+	if probs != nil {
+		desc := make([]string, len(poolShas))
+		for i, sha := range poolShas {
+			s := stats[poolIDs[i]]
+			desc[i] = fmt.Sprintf("%.8s n=%d pts=%.1f p=%.3f", sha, s.games, s.points, probs[i])
+		}
+		log.Printf("[league] pfsp probs (best id=%d): %s", run.BestNetworkID, strings.Join(desc, " | "))
+		pfspCache[key] = probs
+	}
+	return probs
 }
 
 func uploadNetwork(c *gin.Context) {
@@ -731,6 +859,20 @@ func uploadGame(c *gin.Context) {
 		}
 	}
 
+	// Game outcome + learner color (gameready "result"/"player1" tokens,
+	// forwarded verbatim by the client). Feeds league PFSP win rates;
+	// best-effort — absent on old clients and undecided games.
+	gameResult := 0
+	switch c.PostForm("result") {
+	case "whitewon":
+		gameResult = 1
+	case "blackwon":
+		gameResult = 2
+	case "draw":
+		gameResult = 3
+	}
+	learnerIsBlack := c.PostForm("player1") == "black"
+
 	err = db.GetDB().Exec("UPDATE networks SET games_played = games_played + 1 WHERE id = ?", network_id).Error
 	if err != nil {
 		log.Println(err)
@@ -775,6 +917,8 @@ func uploadGame(c *gin.Context) {
 		ResignFPThreshold: resign_fp_threshold,
 		GameNumber:        nextGameNumber,
 		OpponentNetworkID: opponentNetworkID,
+		Result:            gameResult,
+		LearnerIsBlack:    learnerIsBlack,
 	}
 	err = db.GetDB().Create(&game).Error
 	if err != nil {

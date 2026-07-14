@@ -146,6 +146,15 @@ type TrainingGame struct {
 	// Network the learner played against in a league game (0 = normal
 	// self-play; network IDs start at 1).
 	OpponentNetworkID uint `gorm:"index"`
+
+	// Game outcome as reported by the client (gameready "result" token):
+	// 0 = unknown (old client or undecided game), 1 = white won,
+	// 2 = black won, 3 = draw. League PFSP consumes this together with
+	// LearnerIsBlack.
+	Result int
+	// Whether the learner (player1 — the current net, also in league games)
+	// played Black. Only meaningful when Result > 0.
+	LearnerIsBlack bool
 }
 
 type ServerData struct {

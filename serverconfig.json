@@ -22,7 +22,8 @@
   "league": {
     "enabled": true,
     "fraction": 0.2,
-    "poolSize": 8
+    "poolSize": 8,
+    "pfsp": true
   },
   "webserver": {
     "address": ":9830"

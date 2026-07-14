@@ -48,6 +48,12 @@ var Config struct {
 		Enabled  bool
 		Fraction float64
 		PoolSize int
+		// Pfsp weights league opponent sampling by live per-opponent win
+		// rates (AlphaStar-style prioritized fictitious self-play) instead
+		// of uniform: /next_game gains leagueProbs, which the client hands
+		// to the engine as --league-probs. Old clients ignore the field;
+		// old ENGINES fatal on the flag — deploy engine before client.
+		Pfsp bool
 	}
 	WebServer struct {
 		Address string
