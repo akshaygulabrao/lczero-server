@@ -269,34 +269,50 @@ func nextRunSeq(column string, runID uint) (uint, error) {
 	return next, err
 }
 
-func createMatch(trainingRun *db.TrainingRun, targetSlice int, network *db.Network, testonly bool, params string) error {
-	gameCap := config.Config.Matches.Games
+// createMatch queues a match of candidate `network` vs `opponentID` (0 = the
+// run's current best). `games` is the pre-slice game count (0 = Matches.Games
+// from config); at targetSlice 0 the cap is multiplied by 5, so Matches.Games=8
+// means a 40-game main match and a panel leg's Panel.Games=4 means 20 real
+// games. `panelParentID` links a regression-panel leg to its main promotion
+// match (0 = not a panel leg).
+func createMatch(trainingRun *db.TrainingRun, targetSlice int, network *db.Network, testonly bool, params string, opponentID uint, games int, panelParentID uint) (*db.Match, error) {
+	if opponentID == 0 {
+		opponentID = trainingRun.BestNetworkID
+	}
+	if games == 0 {
+		games = config.Config.Matches.Games
+	}
+	gameCap := games
 	if targetSlice == 0 {
 		gameCap *= 5
 	}
 	match := db.Match{
 		TrainingRunID: trainingRun.ID,
 		CandidateID:   network.ID,
-		CurrentBestID: trainingRun.BestNetworkID,
+		CurrentBestID: opponentID,
 		Done:          false,
 		GameCap:       gameCap,
 		Parameters:    params,
 		TargetSlice:   targetSlice,
+		PanelParentID: panelParentID,
 	}
 	if testonly {
 		match.TestOnly = true
 	}
-	return db.GetDB().Create(&match).Error
+	if err := db.GetDB().Create(&match).Error; err != nil {
+		return nil, err
+	}
+	return &match, nil
 }
 
-// leaguePoolShas returns the league opponent pool: shas of past champions at
-// log-spaced distances (1,2,4,8,... promotions ago), newest first, excluding
-// the current best, deduped, capped at League.PoolSize. Champions are
-// reconstructed from passed promotion matches (checkMatchFinished promotes
-// match.CandidateID). Depends ONLY on the matches table + BestNetworkID +
-// static config — never on token/user — so the response is STABLE between
-// promotions (clients restart the engine whenever next_game changes).
-func leaguePoolShas(run *db.TrainingRun) []string {
+// championPoolIDs returns network IDs of past champions at log-spaced
+// distances (1,2,4,8,... promotions ago), newest first, excluding the current
+// best, deduped, capped at `limit`. Champions are reconstructed from passed
+// promotion matches (checkMatchFinished promotes match.CandidateID); panel
+// legs can't leak in (they are test_only and their passed is never written).
+// Depends ONLY on the matches table + BestNetworkID — never on token/user —
+// so the result is STABLE between promotions.
+func championPoolIDs(run *db.TrainingRun, limit int) []uint {
 	var champs []db.Match
 	err := db.GetDB().Select("candidate_id").
 		Where("done = ? AND passed = ? AND test_only = ? AND training_run_id = ?",
@@ -306,18 +322,27 @@ func leaguePoolShas(run *db.TrainingRun) []string {
 		log.Println(err)
 		return nil
 	}
-	poolSize := config.Config.League.PoolSize
-	if poolSize <= 0 {
-		poolSize = 8
-	}
 	var ids []uint
 	seen := map[uint]bool{run.BestNetworkID: true}
-	for k := 1; k < len(champs) && len(ids) < poolSize; k *= 2 {
+	for k := 1; k < len(champs) && len(ids) < limit; k *= 2 {
 		if id := champs[k].CandidateID; !seen[id] {
 			seen[id] = true
 			ids = append(ids, id)
 		}
 	}
+	return ids
+}
+
+// leaguePoolShas returns the league opponent pool: the championPoolIDs
+// champions (capped at League.PoolSize) as shas, newest first. Stability
+// between promotions matters here: clients restart the engine whenever
+// next_game changes.
+func leaguePoolShas(run *db.TrainingRun) []string {
+	poolSize := config.Config.League.PoolSize
+	if poolSize <= 0 {
+		poolSize = 8
+	}
+	ids := championPoolIDs(run, poolSize)
 	if len(ids) == 0 {
 		return nil
 	}
@@ -545,9 +570,9 @@ func uploadNetwork(c *gin.Context) {
 	// fleet plays it (slices 1-3 would starve a 1-node fleet). Self-play pauses
 	// while the match runs — the deliberate cost of gating.
 	//
-	// NOTE: this is the basic candidate-vs-best gate. A regression panel (also
-	// playing the candidate vs past champions and requiring no-regress on each)
-	// is a planned follow-on, not yet wired.
+	// When Matches.Panel is enabled the candidate additionally plays a
+	// regression panel of log-spaced past champions; checkMatchFinished then
+	// promotes only if the main match passes AND no panel leg regresses.
 	if trainingRun.BestNetworkID == 0 {
 		if err := db.GetDB().Model(&db.TrainingRun{}).Where("id = ?", trainingRun.ID).Update("best_network_id", network.ID).Error; err != nil {
 			log.Println(err)
@@ -564,12 +589,33 @@ func uploadNetwork(c *gin.Context) {
 		c.String(500, "Internal error")
 		return
 	}
-	if err := createMatch(trainingRun, 0, &network, false, string(matchParams)); err != nil {
+	mainMatch, err := createMatch(trainingRun, 0, &network, false, string(matchParams), 0, 0, 0)
+	if err != nil {
 		log.Println(err)
 		c.String(500, "Internal error creating gate match")
 		return
 	}
 	log.Printf("[gate] net id=%d sha=%s queued for promotion match vs best id=%d (run %d)", network.ID, network.Sha, trainingRun.BestNetworkID, trainingRun.ID)
+	// Regression panel (anti rock-paper-scissors): the candidate also plays up
+	// to Panel.Opponents log-spaced past champions. championPoolIDs already
+	// excludes the current best (the main match covers it) and dedups; with an
+	// empty pool (early run) no legs are created and the gate degrades to the
+	// plain candidate-vs-best match above. Legs are TestOnly — nextGame
+	// dispatches them like any pending match, but they are not promotion
+	// matches — and linked to the main match via PanelParentID.
+	if config.Config.Matches.Panel.Enabled {
+		for _, champID := range championPoolIDs(trainingRun, config.Config.Matches.Panel.Opponents) {
+			leg, err := createMatch(trainingRun, 0, &network, true, string(matchParams), champID, config.Config.Matches.Panel.Games, mainMatch.ID)
+			if err != nil {
+				// Panel is best-effort: the candidate-vs-best gate stands even
+				// if a leg can't be queued (checkMatchFinished evaluates the
+				// legs that exist).
+				log.Printf("[gate] creating panel leg vs champ id=%d failed: %v", champID, err)
+				break
+			}
+			log.Printf("[gate] panel leg queued (match %d): cand id=%d vs champ id=%d (parent match %d)", leg.ID, network.ID, champID, mainMatch.ID)
+		}
+	}
 	c.String(http.StatusOK, fmt.Sprintf("Network %s uploaded; promotion match created vs best.", network.Sha))
 }
 
@@ -811,6 +857,70 @@ func setBestNetwork(training_id uint, network_id uint) error {
 	return nil
 }
 
+// panelLegs returns the regression-panel legs linked to promotion match mainID.
+func panelLegs(mainID uint) ([]db.Match, error) {
+	var legs []db.Match
+	err := db.GetDB().Where("panel_parent_id = ?", mainID).Order("id").Find(&legs).Error
+	return legs, err
+}
+
+// cancelPanelLegs marks any still-running panel legs of mainID done, so
+// nextGame stops dispatching them once the group verdict is already settled
+// (main match failed, or a leg regressed). In-flight results for a canceled
+// leg still land harmlessly: checkMatchFinished early-returns on Done.
+func cancelPanelLegs(mainID uint) {
+	res := db.GetDB().Model(&db.Match{}).Where("panel_parent_id = ? AND done = ?", mainID, false).Update("done", true)
+	if res.Error != nil {
+		log.Println(res.Error)
+	} else if res.RowsAffected > 0 {
+		log.Printf("[gate] canceled %d pending panel leg(s) of match %d", res.RowsAffected, mainID)
+	}
+}
+
+// resolvePanelVerdict settles a promotion decision whose main match is done
+// and PASSED vs best. It rejects as soon as any completed leg regressed
+// (calcElo <= Matches.Panel.Threshold), canceling the remaining legs; it
+// promotes only once every leg is done and clean; while clean legs are still
+// running it is a no-op. Promotion stays exactly-once: this only runs inside
+// a done-transition of a group member (guarded in checkMatchFinished), and
+// the transition that settles the group is the last one — a rejection cancels
+// the pending legs, so no later transition re-fires it. The main match's
+// `passed` is written HERE, not when the main match merely finishes, so a
+// candidate that later regresses never transiently enters champion history
+// (championPoolIDs reads passed=true).
+func resolvePanelVerdict(main *db.Match, legs []db.Match) error {
+	pending := 0
+	for i := range legs {
+		leg := &legs[i]
+		if !leg.Done {
+			pending++
+			continue
+		}
+		legElo := calcElo(leg.Wins, leg.Losses, leg.Draws)
+		if legElo > config.Config.Matches.Panel.Threshold {
+			continue
+		}
+		if err := db.GetDB().Model(main).Update("passed", false).Error; err != nil {
+			return err
+		}
+		log.Printf("[gate] cand id=%d PASSED vs best but REGRESSED vs panel champ id=%d (calcElo=%.0f < %.0f) -> rejected",
+			main.CandidateID, leg.CurrentBestID, legElo, config.Config.Matches.Panel.Threshold)
+		cancelPanelLegs(main.ID)
+		return nil
+	}
+	if pending > 0 {
+		// Promotion waits for the remaining legs.
+		return nil
+	}
+	if err := db.GetDB().Model(main).Update("passed", true).Error; err != nil {
+		return err
+	}
+	if len(legs) > 0 {
+		log.Printf("[gate] cand id=%d PASSED vs best and all %d panel leg(s) -> PROMOTED to best", main.CandidateID, len(legs))
+	}
+	return setBestNetwork(main.TrainingRunID, main.CandidateID)
+}
+
 func checkMatchFinished(match_id uint) error {
 	// Now check to see if match is finished
 	var match db.Match
@@ -825,9 +935,34 @@ func checkMatchFinished(match_id uint) error {
 	}
 
 	if match.Wins+match.Losses+match.Draws >= match.GameCap {
+		// NOTE (group races): every match writes its own `done` FIRST and only
+		// then reads the other group members, so of two concurrent finishes at
+		// least one observes the other's completion and settles the verdict.
 		err = db.GetDB().Model(&match).Update("done", true).Error
 		if err != nil {
 			return err
+		}
+		// A regression-panel leg finished. It carries no verdict of its own
+		// (its Passed is never written); it only feeds the parent promotion
+		// match's group verdict — and only once the parent is done and itself
+		// PASSED vs best (a failed parent already rejected the candidate and
+		// canceled the legs).
+		if match.PanelParentID != 0 {
+			log.Printf("[gate] panel leg (match %d) done: cand id=%d vs champ id=%d  %d-%d-%d (W-L-D)  calcElo=%.0f panel thr=%.0f",
+				match.ID, match.CandidateID, match.CurrentBestID, match.Wins, match.Losses, match.Draws,
+				calcElo(match.Wins, match.Losses, match.Draws), config.Config.Matches.Panel.Threshold)
+			var main db.Match
+			if err := db.GetDB().Where("id = ?", match.PanelParentID).First(&main).Error; err != nil {
+				return err
+			}
+			if !main.Done || calcElo(main.Wins, main.Losses, main.Draws) <= config.Config.Matches.Threshold {
+				return nil
+			}
+			legs, err := panelLegs(main.ID)
+			if err != nil {
+				return err
+			}
+			return resolvePanelVerdict(&main, legs)
 		}
 		if match.TestOnly {
 			return nil
@@ -835,7 +970,7 @@ func checkMatchFinished(match_id uint) error {
 		// Update to our new best network
 		// TODO(SPRT)
 		passed := calcElo(match.Wins, match.Losses, match.Draws) > config.Config.Matches.Threshold
-		err = db.GetDB().Model(&match).Update("passed", passed).Error
+		legs, err := panelLegs(match.ID)
 		if err != nil {
 			return err
 		}
@@ -843,15 +978,29 @@ func checkMatchFinished(match_id uint) error {
 		if passed {
 			verdict = "PROMOTED to best"
 		}
+		deferred := passed && len(legs) > 0
+		if deferred {
+			// The verdict now belongs to the whole panel group; `passed` is
+			// only written when the group settles (resolvePanelVerdict).
+			verdict = fmt.Sprintf("PASSED vs best; verdict deferred to %d panel leg(s)", len(legs))
+		} else if err := db.GetDB().Model(&match).Update("passed", passed).Error; err != nil {
+			return err
+		}
 		log.Printf("[gate] match %d done: cand id=%d vs best id=%d  %d-%d-%d (W-L-D)  calcElo=%.0f thr=%.0f -> %s",
 			match.ID, match.CandidateID, match.CurrentBestID, match.Wins, match.Losses, match.Draws,
 			calcElo(match.Wins, match.Losses, match.Draws), config.Config.Matches.Threshold, verdict)
-		if passed {
-			err = setBestNetwork(match.TrainingRunID, match.CandidateID)
-			if err != nil {
-				return err
+		if !passed {
+			// A failed candidate can't be promoted regardless of the panel:
+			// stop any legs still running.
+			if len(legs) > 0 {
+				cancelPanelLegs(match.ID)
 			}
+			return nil
 		}
+		if !deferred {
+			return setBestNetwork(match.TrainingRunID, match.CandidateID)
+		}
+		return resolvePanelVerdict(&match, legs)
 	}
 
 	return nil

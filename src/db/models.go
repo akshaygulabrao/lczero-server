@@ -93,6 +93,12 @@ type Match struct {
 	// If true, match is unusual so shouldn't be used for elo.
 	SpecialParams bool
 
+	// If nonzero, this match is a regression-panel leg (candidate vs a past
+	// champion) belonging to the main promotion match with this ID. Legs are
+	// also TestOnly (not promotion matches themselves) and their Passed is
+	// never written, so they can never enter champion history.
+	PanelParentID uint
+
 	TargetSlice int
 }
 

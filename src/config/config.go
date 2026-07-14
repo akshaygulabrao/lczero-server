@@ -28,6 +28,21 @@ var Config struct {
 		Games      int
 		Parameters []interface{}
 		Threshold  float64
+		// Panel is the promotion-gate regression panel: each candidate also
+		// plays up to Opponents log-spaced past champions, and promotion
+		// additionally requires calcElo > Threshold on every leg (anti
+		// rock-paper-scissors: beating the current best is not enough if the
+		// candidate regresses vs older champions).
+		// NOTE the x5 semantics: panel legs run at target_slice 0 and
+		// createMatch multiplies the slice-0 game cap by 5, so Games=4 means
+		// 20 real games per leg (just like Matches.Games=8 means a 40-game
+		// main match).
+		Panel struct {
+			Enabled   bool
+			Opponents int
+			Games     int
+			Threshold float64
+		}
 	}
 	League struct {
 		Enabled  bool
