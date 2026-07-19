@@ -29,6 +29,15 @@ SE_RATIO="${SE_RATIO:-8}"
 # reboot can't silently flip the A/B arm back to visits / q-ratio 0.5.
 POLICY_TARGET="${POLICY_TARGET:-improved}"
 VALUE_Q_RATIO="${VALUE_Q_RATIO:-0}"
+# Run-22 era candidate-distinguishability knobs (2026-07-14): published nets are the
+# EMA, and at fleet step rates the old 0.999 decay made consecutive candidates ~90%
+# identical — the gate was comparing twins. Defaults track the CURRENT run so a bare
+# reboot can't silently revert them (same rationale as the arch dims above).
+EMA_DECAY="${EMA_DECAY:-0.99}"
+# 400 since 2026-07-18: at publish-200 the 240-game gate ate ~23% of GPU time and
+# candidates carried deltas inside gate noise (±28 Elo @160g); 400 halves gate
+# load (+13% training throughput) and doubles per-candidate signal.
+PUBLISH_GAMES="${PUBLISH_GAMES:-400}"
 PARALLELISM="${PARALLELISM:-32}"
 export PATH=/usr/local/go/bin:/usr/bin:/usr/local/bin:/usr/sbin:$PATH
 
@@ -62,9 +71,9 @@ tmux new-session -d -s cc -n server -c "$SRV"
 tmux send-keys -t cc:server "cd $SRV && PATH=/usr/local/go/bin:\$PATH RUN_NAME=$RUN_NAME scripts/launch_server.sh 2>&1 | tee -a server.log" C-m
 # trainer — auto-warm-resume from trainer/run1/weights.pt (the current run's net)
 tmux new-window -t cc -n trainer -c "$SRV"
-tmux send-keys -t cc:trainer "cd $SRV && sleep 10 && ENGINE_DIR=$ENG SERVER=http://localhost:10100 ARCH_VERSION=$ARCH_VERSION C_FILTERS=$C_FILTERS N_BLOCKS=$N_BLOCKS SE_RATIO=$SE_RATIO POLICY_TARGET=$POLICY_TARGET VALUE_Q_RATIO=$VALUE_Q_RATIO scripts/launch_trainer.sh 2>&1 | tee -a trainer.log" C-m
+tmux send-keys -t cc:trainer "cd $SRV && sleep 10 && ENGINE_DIR=$ENG SERVER=http://localhost:10100 ARCH_VERSION=$ARCH_VERSION C_FILTERS=$C_FILTERS N_BLOCKS=$N_BLOCKS SE_RATIO=$SE_RATIO POLICY_TARGET=$POLICY_TARGET VALUE_Q_RATIO=$VALUE_Q_RATIO EMA_DECAY=$EMA_DECAY PUBLISH_GAMES=$PUBLISH_GAMES scripts/launch_trainer.sh 2>&1 | tee -a trainer.log" C-m
 # self-play client
 tmux new-session -d -s cc-client -n selfplay -c "$CL"
 tmux send-keys -t cc-client "export PATH=$CL/.enginebin:\$PATH; cd $CL; ./lc0-client -hostname http://localhost:10100 -user vast -password chessckers -run 1 -parallelism $PARALLELISM 2>&1 | tee -a client.log" C-m
 
-log "relaunched cc (server+trainer) + cc-client  [run=$RUN_NAME arch=$ARCH_VERSION c=$C_FILTERS b=$N_BLOCKS target=$POLICY_TARGET qratio=$VALUE_Q_RATIO p=$PARALLELISM]"
+log "relaunched cc (server+trainer) + cc-client  [run=$RUN_NAME arch=$ARCH_VERSION c=$C_FILTERS b=$N_BLOCKS target=$POLICY_TARGET qratio=$VALUE_Q_RATIO ema=$EMA_DECAY pubg=$PUBLISH_GAMES p=$PARALLELISM]"

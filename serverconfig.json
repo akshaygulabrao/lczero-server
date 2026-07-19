@@ -14,10 +14,10 @@
     "backupNetworkLocation": ""
   },
   "matches": {
-    "games": 8,
+    "games": 32,
     "parameters": ["--visits=128", "--temperature=1.0", "--tempdecay-moves=10", "--temp-visit-offset=-0.8"],
     "threshold": -20.0,
-    "panel": {"enabled": true, "opponents": 2, "games": 4, "threshold": -50}
+    "panel": {"enabled": true, "opponents": 2, "games": 8, "threshold": -50}
   },
   "league": {
     "enabled": true,
