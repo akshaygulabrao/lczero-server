@@ -10,7 +10,10 @@
 #   restart_fleet.sh --boot    # @reboot: wait BOOT_WAIT first (box settles)
 #
 # Overridable via env: RUN_NAME, ARCH_VERSION, C_FILTERS/N_BLOCKS/SE_RATIO,
-# POLICY_TARGET, VALUE_Q_RATIO, PARALLELISM, BOOT_WAIT.
+# POLICY_TARGET, VALUE_Q_RATIO, PARALLELISM, BOOT_WAIT, SEED (trainer RNG),
+# PCR_FULL_PROB/PCR_FAST_VISITS (PCR reaches bootstrap only on an EMPTY DB —
+# i.e. a post-reset relaunch, the mate_bench trials path; on a plain reboot the
+# DB persists and it's a no-op).
 set -uo pipefail
 SRV=/workspace/chessckers/lczero-server
 ENG=/workspace/chessckers/engine
@@ -38,6 +41,7 @@ EMA_DECAY="${EMA_DECAY:-0.99}"
 # candidates carried deltas inside gate noise (±28 Elo @160g); 400 halves gate
 # load (+13% training throughput) and doubles per-candidate signal.
 PUBLISH_GAMES="${PUBLISH_GAMES:-400}"
+SEED="${SEED:-0}"     # trainer RNG; mate_bench trials pass a distinct value per trial
 PARALLELISM="${PARALLELISM:-32}"
 export PATH=/usr/local/go/bin:/usr/bin:/usr/local/bin:/usr/sbin:$PATH
 
@@ -66,12 +70,13 @@ tmux kill-session -t cc 2>/dev/null || true
 tmux kill-session -t cc-client 2>/dev/null || true
 sleep 1
 
-# server — resumes the existing DB/nets state on disk (RUN_NAME is just a label)
+# server — resumes the existing DB/nets state on disk (RUN_NAME is just a label;
+# PCR_* only matter when the DB is empty and bootstrap seeds trainParams)
 tmux new-session -d -s cc -n server -c "$SRV"
-tmux send-keys -t cc:server "cd $SRV && PATH=/usr/local/go/bin:\$PATH RUN_NAME=$RUN_NAME scripts/launch_server.sh 2>&1 | tee -a server.log" C-m
+tmux send-keys -t cc:server "cd $SRV && PATH=/usr/local/go/bin:\$PATH RUN_NAME=$RUN_NAME PCR_FULL_PROB=${PCR_FULL_PROB:-} PCR_FAST_VISITS=${PCR_FAST_VISITS:-} scripts/launch_server.sh 2>&1 | tee -a server.log" C-m
 # trainer — auto-warm-resume from trainer/run1/weights.pt (the current run's net)
 tmux new-window -t cc -n trainer -c "$SRV"
-tmux send-keys -t cc:trainer "cd $SRV && sleep 10 && ENGINE_DIR=$ENG SERVER=http://localhost:10100 ARCH_VERSION=$ARCH_VERSION C_FILTERS=$C_FILTERS N_BLOCKS=$N_BLOCKS SE_RATIO=$SE_RATIO POLICY_TARGET=$POLICY_TARGET VALUE_Q_RATIO=$VALUE_Q_RATIO EMA_DECAY=$EMA_DECAY PUBLISH_GAMES=$PUBLISH_GAMES scripts/launch_trainer.sh 2>&1 | tee -a trainer.log" C-m
+tmux send-keys -t cc:trainer "cd $SRV && sleep 10 && ENGINE_DIR=$ENG SERVER=http://localhost:10100 ARCH_VERSION=$ARCH_VERSION C_FILTERS=$C_FILTERS N_BLOCKS=$N_BLOCKS SE_RATIO=$SE_RATIO POLICY_TARGET=$POLICY_TARGET VALUE_Q_RATIO=$VALUE_Q_RATIO EMA_DECAY=$EMA_DECAY PUBLISH_GAMES=$PUBLISH_GAMES SEED=$SEED scripts/launch_trainer.sh 2>&1 | tee -a trainer.log" C-m
 # self-play client
 tmux new-session -d -s cc-client -n selfplay -c "$CL"
 tmux send-keys -t cc-client "export PATH=$CL/.enginebin:\$PATH; cd $CL; ./lc0-client -hostname http://localhost:10100 -user vast -password chessckers -run 1 -parallelism $PARALLELISM 2>&1 | tee -a client.log" C-m

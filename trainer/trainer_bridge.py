@@ -162,6 +162,9 @@ def main() -> int:
     p.add_argument("--lr-gamma", type=float, default=None)
     p.add_argument("--ema-decay", type=float, default=None,
                    help="publish an EMA of the weights (lc0-SWA analog); 0 = raw weights")
+    p.add_argument("--seed", type=int, default=None,
+                   help="trainer RNG seed (torch init + replay sampling); mate_bench "
+                        "trials pass a distinct seed per trial for independent inits")
     p.add_argument("--buffer-cap", type=int, default=None)
     p.add_argument("--batch-size", type=int, default=None)
     p.add_argument("--min-buffer", type=int, default=None)
@@ -261,6 +264,7 @@ def main() -> int:
             ("--lr-decay-steps", args.lr_decay_steps),
             ("--lr-gamma", args.lr_gamma),
             ("--ema-decay", args.ema_decay),
+            ("--seed", args.seed),
         ):
             if val is not None:
                 cmd += [flag, str(val)]

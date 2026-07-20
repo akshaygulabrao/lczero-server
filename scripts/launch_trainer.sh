@@ -67,13 +67,14 @@ LR_DECAY_STEPS="${LR_DECAY_STEPS:-0}"          # 0 = no step schedule / constant
 LR_GAMMA="${LR_GAMMA:-0.5}"
 EMA_DECAY="${EMA_DECAY:-0.999}"  # publish EMA of weights (0 = raw)
 BATCH_SIZE="${BATCH_SIZE:-1024}" # SGD minibatch (lc0 uses 1024-4096; was bridge-default 256). Larger -> smoother gradients
+SEED="${SEED:-0}"                # trainer RNG (torch init + replay sampling); mate_bench trials set a distinct seed per trial
 PY="${ENGINE_DIR}/.venv/bin/python"
 [ -x "$PY" ] || PY="$(command -v python3)"
 
 mkdir -p "$RUN_DIR"
 echo "[trainer] server=$SERVER engine=$ENGINE_DIR run=$RUN_DIR arch=$ARCH_VERSION tf=$TF_BLOCKS se=$SE_RATIO c=$C_FILTERS b=$N_BLOCKS"
 echo "[trainer] publish=[${PUBLISH_GAMES}g/${PUBLISH_STEPS}st/${PUBLISH_SECONDS}s] window=${WINDOW_GAMES_MIN}->${WINDOW_GAMES}g@a${WINDOW_RAMP_ALPHA} replay_factor=$REPLAY_FACTOR value_discount=$VALUE_DISCOUNT q_ratio=$VALUE_Q_RATIO policy_target=$POLICY_TARGET min_buffer=$MIN_BUFFER buffer_cap=$BUFFER_CAP batch=$BATCH_SIZE ema=$EMA_DECAY lr=$LR warmup=$LR_WARMUP_STEPS lr_decay=${LR_DECAY_STEPS}@${LR_GAMMA}"
-echo "[trainer] base=${BASE:-<random init>}"
+echo "[trainer] base=${BASE:-<random init (seed $SEED)>}"
 exec "$PY" trainer/trainer_bridge.py \
 	--server "$SERVER" \
 	--base "$BASE" \
@@ -104,4 +105,5 @@ exec "$PY" trainer/trainer_bridge.py \
 	--lr-warmup-steps "$LR_WARMUP_STEPS" \
 	--lr-decay-steps "$LR_DECAY_STEPS" \
 	--lr-gamma "$LR_GAMMA" \
-	--ema-decay "$EMA_DECAY"
+	--ema-decay "$EMA_DECAY" \
+	--seed "$SEED"
