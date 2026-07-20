@@ -24,6 +24,9 @@ sleep 1
 
 echo "[reset] wiping server state (db, networks, games, pgns, trainer runs)..."
 rm -rf chessckers.db chessckers.db-wal chessckers.db-shm networks games pgns trainer/run*
+# Flush dirty pages: bulk deletes + the relaunch IO storm inside a page-cache-
+# accounted cgroup are exactly when the box's OOM killer has struck (2026-07-20).
+sync || true
 
 # Nets are keyed by sha so a stale cache is harmless, but clear the LOCAL client
 # cache for a truly clean start. Other client machines clear their own.
