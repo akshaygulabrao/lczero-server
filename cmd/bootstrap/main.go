@@ -6,6 +6,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"os"
 
@@ -40,7 +41,35 @@ func main() {
 	// Match parameters keep some opening temperature (the start position is fixed,
 	// so without it every game between the same two nets would be identical) but
 	// converge to near-greedy play after the opening.
-	trainParams := `["--noise-epsilon=0.25","--noise-alpha=0.3","--temperature=1.0","--tempdecay-moves=15","--visits=800"]`
+	//
+	// PCR flags (probabilistic chain reduction): opt-in via env so runs that don't
+	// set them get exactly the same trainParams as before (no silent inheritance).
+	//   PCR_FULL_PROB=0.25  -> appends --pcr-full-prob=0.25 --pcr-fast-visits=<PCR_FAST_VISITS|100>
+	//   PCR_FULL_PROB unset -> trainParams is the baseline literal below, unchanged.
+	var trainParamsJSON string
+	if pcrProb := os.Getenv("PCR_FULL_PROB"); pcrProb != "" {
+		pcrVisits := os.Getenv("PCR_FAST_VISITS")
+		if pcrVisits == "" {
+			pcrVisits = "100"
+		}
+		flags := []string{
+			"--noise-epsilon=0.25",
+			"--noise-alpha=0.3",
+			"--temperature=1.0",
+			"--tempdecay-moves=15",
+			"--visits=800",
+			"--pcr-full-prob=" + pcrProb,
+			"--pcr-fast-visits=" + pcrVisits,
+		}
+		b, err := json.Marshal(flags)
+		if err != nil {
+			log.Fatal(err)
+		}
+		trainParamsJSON = string(b)
+	} else {
+		trainParamsJSON = `["--noise-epsilon=0.25","--noise-alpha=0.3","--temperature=1.0","--tempdecay-moves=15","--visits=800"]`
+	}
+	trainParams := trainParamsJSON
 	matchParams := `["--visits=128","--temperature=1.0","--tempdecay-moves=10","--temp-visit-offset=-0.8"]`
 	err := db.GetDB().Model(run).Updates(map[string]interface{}{
 		"train_parameters": trainParams,

@@ -163,6 +163,19 @@ def _age(mtime: float) -> str:
     return f"{s}s ago" if s < 90 else f"{s // 60}m{s % 60:02d}s ago"
 
 
+def _humanize_elapsed(seconds: float) -> str:
+    """Format elapsed seconds as '3d 4h' / '5h 12m' / '48m'."""
+    s = int(seconds)
+    days, s = divmod(s, 86400)
+    hours, s = divmod(s, 3600)
+    minutes = s // 60
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    return f"{minutes}m"
+
+
 def snapshot(
     games_dir: Path, run_dir: Path, db_path: Path, pgn_dir: Path | None = None
 ) -> str:
@@ -199,6 +212,25 @@ def snapshot(
             except Exception:  # noqa: BLE001
                 pass
             L.append(f'run:        "{_rdesc}" (db #{_rid}, games dir {_games_base}){_thr_seg}')
+            # Run clock: elapsed since the training_run row was created.
+            # datetime(created_at) normalizes GORM's offset-suffixed timestamps to UTC.
+            try:
+                import datetime as _dt
+                _rcon2 = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                _ts_row = _rcon2.execute(
+                    "SELECT datetime(created_at), datetime('now') FROM training_runs "
+                    "WHERE id = ?", (_rid,)
+                ).fetchone()
+                _rcon2.close()
+                if _ts_row and _ts_row[0]:
+                    _start = _dt.datetime.fromisoformat(_ts_row[0]).replace(
+                        tzinfo=_dt.timezone.utc)
+                    _now = _dt.datetime.fromisoformat(_ts_row[1]).replace(
+                        tzinfo=_dt.timezone.utc)
+                    _elapsed = _humanize_elapsed((_now - _start).total_seconds())
+                    L.append(f"clock:      {_elapsed}  (run started {_ts_row[0][:16]} UTC)")
+            except Exception:  # noqa: BLE001
+                pass
     except Exception:  # noqa: BLE001
         pass
 
