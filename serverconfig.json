@@ -15,7 +15,7 @@
   },
   "matches": {
     "games": 32,
-    "parameters": ["--visits=128", "--temperature=1.0", "--tempdecay-moves=10", "--temp-visit-offset=-0.8"],
+    "parameters": ["--visits=128", "--temperature=1.0", "--tempdecay-moves=10", "--temp-visit-offset=-0.8", "--parallelism=8"],
     "threshold": -20.0,
     "panel": {"enabled": true, "opponents": 2, "games": 8, "threshold": -50}
   },
