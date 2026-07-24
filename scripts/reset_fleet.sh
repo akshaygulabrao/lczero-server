@@ -30,7 +30,11 @@ sync || true
 
 # Nets are keyed by sha so a stale cache is harmless, but clear the LOCAL client
 # cache for a truly clean start. Other client machines clear their own.
+# The macOS path below was the ONLY one until 2026-07-24 — on the Linux fleet box
+# it does not exist, so every "reset" silently left the real cache
+# (/root/.cache/chessckers, 358MB of the previous run's nets) in place. Clear both.
 rm -rf "$HOME/Library/Caches/chessckers/client-cache/"* 2>/dev/null || true
+rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/chessckers/"* 2>/dev/null || true
 
 echo "[reset] done. Re-launch:"
 echo "  scripts/launch_server.sh         # tab 1"
