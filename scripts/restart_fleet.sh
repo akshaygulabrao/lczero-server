@@ -73,7 +73,7 @@ sleep 1
 # server — resumes the existing DB/nets state on disk (RUN_NAME is just a label;
 # PCR_* only matter when the DB is empty and bootstrap seeds trainParams)
 tmux new-session -d -s cc -n server -c "$SRV"
-tmux send-keys -t cc:server "cd $SRV && PATH=/usr/local/go/bin:\$PATH RUN_NAME=$RUN_NAME PCR_FULL_PROB=${PCR_FULL_PROB:-} PCR_FAST_VISITS=${PCR_FAST_VISITS:-} scripts/launch_server.sh 2>&1 | tee -a server.log" C-m
+tmux send-keys -t cc:server "cd $SRV && PATH=/usr/local/go/bin:\$PATH RUN_NAME=$RUN_NAME PCR_FULL_PROB=${PCR_FULL_PROB:-} PCR_FAST_VISITS=${PCR_FAST_VISITS:-} GUMBEL_SH=${GUMBEL_SH:-} GUMBEL_M=${GUMBEL_M:-} VISITS=${VISITS:-} scripts/launch_server.sh 2>&1 | tee -a server.log" C-m
 # trainer — auto-warm-resume from trainer/run1/weights.pt (the current run's net)
 tmux new-window -t cc -n trainer -c "$SRV"
 tmux send-keys -t cc:trainer "cd $SRV && sleep 10 && ENGINE_DIR=$ENG SERVER=http://localhost:10100 ARCH_VERSION=$ARCH_VERSION C_FILTERS=$C_FILTERS N_BLOCKS=$N_BLOCKS SE_RATIO=$SE_RATIO POLICY_TARGET=$POLICY_TARGET VALUE_Q_RATIO=$VALUE_Q_RATIO EMA_DECAY=$EMA_DECAY PUBLISH_GAMES=$PUBLISH_GAMES SEED=$SEED scripts/launch_trainer.sh 2>&1 | tee -a trainer.log" C-m

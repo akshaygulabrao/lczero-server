@@ -23,7 +23,7 @@ RUN_NAME="${RUN_NAME:-V4_e8d8}"
 echo "[server] building..."
 CGO_ENABLED=1 go build -o cc-server .
 CGO_ENABLED=1 go build -o cc-bootstrap ./cmd/bootstrap
-RUN_NAME="$RUN_NAME" PCR_FULL_PROB="${PCR_FULL_PROB:-}" PCR_FAST_VISITS="${PCR_FAST_VISITS:-}" ./cc-bootstrap   # schema + run #1 named "$RUN_NAME" (+ train/match params); no-op if already present
+RUN_NAME="$RUN_NAME" PCR_FULL_PROB="${PCR_FULL_PROB:-}" PCR_FAST_VISITS="${PCR_FAST_VISITS:-}" GUMBEL_SH="${GUMBEL_SH:-}" GUMBEL_M="${GUMBEL_M:-}" VISITS="${VISITS:-}" ./cc-bootstrap   # schema + run #1 named "$RUN_NAME" (+ train/match params); no-op if already present
 
 ts_name="$(hostname -s 2>/dev/null || hostname)"
 ts_ip="$(tailscale ip -4 2>/dev/null | head -1 || echo '?')"

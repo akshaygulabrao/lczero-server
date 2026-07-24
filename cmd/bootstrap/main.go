@@ -46,8 +46,34 @@ func main() {
 	// set them get exactly the same trainParams as before (no silent inheritance).
 	//   PCR_FULL_PROB=0.25  -> appends --pcr-full-prob=0.25 --pcr-fast-visits=<PCR_FAST_VISITS|100>
 	//   PCR_FULL_PROB unset -> trainParams is the baseline literal below, unchanged.
+	//
+	// Gumbel S2 (run 26+): GUMBEL_SH=true emits ONLY the S2 flag set —
+	// --visits=<VISITS|64> --gumbel-sh=true --gumbel-m=<GUMBEL_M|16>. No Dirichlet
+	// or temperature flags: under S2 the Gumbel root perturbation is the
+	// exploration mechanism and the Sequential Halving winner is the played move.
+	// Requires an engine with fork commit 03e524e+ deployed FIRST (older engines
+	// die on the unknown flag — the league deploy-order lesson).
 	var trainParamsJSON string
-	if pcrProb := os.Getenv("PCR_FULL_PROB"); pcrProb != "" {
+	if os.Getenv("GUMBEL_SH") == "true" {
+		visits := os.Getenv("VISITS")
+		if visits == "" {
+			visits = "64"
+		}
+		gumbelM := os.Getenv("GUMBEL_M")
+		if gumbelM == "" {
+			gumbelM = "16"
+		}
+		flags := []string{
+			"--visits=" + visits,
+			"--gumbel-sh=true",
+			"--gumbel-m=" + gumbelM,
+		}
+		b, err := json.Marshal(flags)
+		if err != nil {
+			log.Fatal(err)
+		}
+		trainParamsJSON = string(b)
+	} else if pcrProb := os.Getenv("PCR_FULL_PROB"); pcrProb != "" {
 		pcrVisits := os.Getenv("PCR_FAST_VISITS")
 		if pcrVisits == "" {
 			pcrVisits = "100"
