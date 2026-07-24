@@ -711,6 +711,19 @@ func uploadNetwork(c *gin.Context) {
 		c.String(http.StatusOK, fmt.Sprintf("Network %s uploaded and promoted (bootstrap).", network.Sha))
 		return
 	}
+	// Gating disabled (matches.disabled): auto-promote every candidate, no
+	// match created. See the config.go comment for the panel/league side
+	// effects (both degrade to plain self-play — empty champion pool).
+	if config.Config.Matches.Disabled {
+		if err := db.GetDB().Model(&db.TrainingRun{}).Where("id = ?", trainingRun.ID).Update("best_network_id", network.ID).Error; err != nil {
+			log.Println(err)
+			c.String(500, "Internal error")
+			return
+		}
+		log.Printf("[gate] gating DISABLED — net id=%d sha=%s auto-promoted to best (run %d)", network.ID, network.Sha, trainingRun.ID)
+		c.String(http.StatusOK, fmt.Sprintf("Network %s uploaded and auto-promoted (gating disabled).", network.Sha))
+		return
+	}
 	matchParams, err := json.Marshal(config.Config.Matches.Parameters)
 	if err != nil {
 		log.Println(err)

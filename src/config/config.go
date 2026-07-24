@@ -25,6 +25,14 @@ var Config struct {
 		BackupNetworkLocation string
 	}
 	Matches struct {
+		// Disabled turns the promotion gate OFF entirely: every uploaded
+		// candidate is auto-promoted to best (pre-2026-06-13 behavior), no
+		// candidate-vs-best match or panel legs are created. Side effect:
+		// championPoolIDs walks promotion MATCHES, so with gating disabled the
+		// champion pool is empty — the regression panel and league self-play
+		// degrade to plain self-play. Default false = gating on (an absent key
+		// keeps the historical behavior).
+		Disabled   bool
 		Games      int
 		Parameters []interface{}
 		Threshold  float64
