@@ -93,7 +93,27 @@ func main() {
 		}
 		trainParamsJSON = string(b)
 	} else {
-		trainParamsJSON = `["--noise-epsilon=0.25","--noise-alpha=0.3","--temperature=1.0","--tempdecay-moves=15","--visits=800"]`
+		// Baseline (PUCT + Dirichlet + temperature). VISITS overrides the 800
+		// default so the run-27 ablation can run this EXACT flag set at 64
+		// visits — the only way to separate "low visits are enough" from
+		// "Sequential Halving is what makes low visits work" (run 26 changed
+		// both at once). Unset VISITS => byte-identical to the old literal.
+		visits := os.Getenv("VISITS")
+		if visits == "" {
+			visits = "800"
+		}
+		flags := []string{
+			"--noise-epsilon=0.25",
+			"--noise-alpha=0.3",
+			"--temperature=1.0",
+			"--tempdecay-moves=15",
+			"--visits=" + visits,
+		}
+		b, err := json.Marshal(flags)
+		if err != nil {
+			log.Fatal(err)
+		}
+		trainParamsJSON = string(b)
 	}
 	trainParams := trainParamsJSON
 	matchParams := `["--visits=128","--temperature=1.0","--tempdecay-moves=10","--temp-visit-offset=-0.8"]`
