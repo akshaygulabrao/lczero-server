@@ -30,7 +30,7 @@
       "games": 8,
       "threshold": -50
     },
-    "everyNNetworks": 12,
+    "everyNNetworks": 15,
     "selfplayUsesLatest": true
   },
   "league": {
