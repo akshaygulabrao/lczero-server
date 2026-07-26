@@ -25,7 +25,7 @@
     ],
     "threshold": -20.0,
     "panel": {
-      "enabled": false,
+      "enabled": true,
       "opponents": 2,
       "games": 8,
       "threshold": -50
