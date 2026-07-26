@@ -36,6 +36,31 @@ var Config struct {
 		Games      int
 		Parameters []interface{}
 		Threshold  float64
+		// EveryNNetworks throttles the gate: a candidate-vs-best match is
+		// created only every Nth uploaded network (0 or 1 = every network, the
+		// historical behavior). Gating is SERIAL with self-play — the fleet
+		// pauses while a match runs — so this is the dial that sets what
+		// fraction of total fleet compute goes to gating. Rough sizing: a gate
+		// costs Games*5 (+ panel legs) games at Matches.Parameters visits;
+		// divide that by the visits the fleet self-plays between gates.
+		// Skipped candidates are NOT promoted — best_network_id stays on the
+		// last gate-approved net — so pair this with SelfplayUsesLatest or the
+		// data-generating net freezes between promotions.
+		// Side effect: promotions become ~N times rarer, so championPoolIDs
+		// (and hence the league pool and the regression panel) fills ~N times
+		// slower.
+		EveryNNetworks int
+		// SelfplayUsesLatest decouples the data-generating net from the gate:
+		// when true, /next_game hands TRAINING games the most recently
+		// uploaded network for the run instead of best_network_id. Match games
+		// are unaffected — they carry their own candidate/best pair. This is
+		// what makes a low-frequency gate safe: without it, throttling the gate
+		// also freezes self-play on a stale net, trading compute for worse
+		// data. best_network_id keeps its meaning as the last gate-approved
+		// checkpoint (gate opponent, league anchor, champion-pool exclusion),
+		// so the gate degrades from a blocking promotion test to a periodic
+		// regression tripwire.
+		SelfplayUsesLatest bool
 		// Panel is the promotion-gate regression panel: each candidate also
 		// plays up to Opponents log-spaced past champions, and promotion
 		// additionally requires calcElo > Threshold on every leg (anti

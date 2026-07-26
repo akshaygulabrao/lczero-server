@@ -140,6 +140,19 @@ func nextGame(c *gin.Context) {
 		c.String(500, "Internal error 1")
 		return
 	}
+	// Matches.SelfplayUsesLatest: TRAINING games play the newest uploaded net
+	// rather than the last gate-approved one, so throttling the gate
+	// (Matches.EveryNNetworks) does not also freeze the data-generating net.
+	// Match games are unaffected — they carry their own candidate/best pair
+	// (see match[0].CurrentBest/Candidate below). Falls back to best if the
+	// lookup fails, so a bad query degrades to the historical behavior.
+	if config.Config.Matches.SelfplayUsesLatest {
+		var latest db.Network
+		if e := db.GetDB().Where("training_run_id = ?", trainingRun.ID).
+			Order("id desc").First(&latest).Error; e == nil && latest.ID != 0 {
+			network = latest
+		}
+	}
 
 	var match []db.Match
 	// Skip matches on request
@@ -192,7 +205,9 @@ func nextGame(c *gin.Context) {
 		result := gin.H{
 			"type":         "train",
 			"trainingId":   trainingRun.ID,
-			"networkId":    trainingRun.BestNetworkID,
+			// network.ID, not BestNetworkID: under SelfplayUsesLatest these
+			// diverge, and networkId must match the sha handed out below.
+			"networkId":    network.ID,
 			"params":       trainingRun.TrainParameters,
 			"sha":          network.Sha,
 			"candidateSha": otherNetwork.Sha,
@@ -204,7 +219,9 @@ func nextGame(c *gin.Context) {
 		result := gin.H{
 			"type":       "train",
 			"trainingId": trainingRun.ID,
-			"networkId":  trainingRun.BestNetworkID,
+			// network.ID, not BestNetworkID: under SelfplayUsesLatest these
+			// diverge, and networkId must match the sha handed out below.
+			"networkId":  network.ID,
 			"params":     trainingRun.TrainParameters,
 			"sha":        network.Sha,
 			"bookUrl":    trainingRun.TrainBook,
@@ -723,6 +740,30 @@ func uploadNetwork(c *gin.Context) {
 		log.Printf("[gate] gating DISABLED — net id=%d sha=%s auto-promoted to best (run %d)", network.ID, network.Sha, trainingRun.ID)
 		c.String(http.StatusOK, fmt.Sprintf("Network %s uploaded and auto-promoted (gating disabled).", network.Sha))
 		return
+	}
+	// Matches.EveryNNetworks: throttle the gate to a fraction of fleet compute.
+	// Gating is serial with self-play, so a gate every upload can eat ~half the
+	// run. Count networks uploaded since the candidate of the most recent
+	// PROMOTION match (test_only=false; panel legs are test-only and must not
+	// reset the counter) and skip until N have accumulated. A skipped candidate
+	// is NOT promoted — best_network_id stays on the last gate-approved net —
+	// which is only safe alongside Matches.SelfplayUsesLatest, or the fleet
+	// keeps self-playing a frozen net between gates.
+	if n := config.Config.Matches.EveryNNetworks; n > 1 {
+		var lastGate db.Match
+		if e := db.GetDB().Where("training_run_id = ? AND test_only = ?", trainingRun.ID, false).
+			Order("id desc").First(&lastGate).Error; e == nil {
+			var since int64
+			if e := db.GetDB().Model(&db.Network{}).
+				Where("training_run_id = ? AND id > ?", trainingRun.ID, lastGate.CandidateID).
+				Count(&since).Error; e == nil && since < int64(n) {
+				log.Printf("[gate] net id=%d sha=%s NOT gated — %d/%d networks since last gate "+
+					"(Matches.EveryNNetworks; best stays id=%d) (run %d)",
+					network.ID, network.Sha, since, n, trainingRun.BestNetworkID, trainingRun.ID)
+				c.String(http.StatusOK, fmt.Sprintf("Network %s uploaded (gate throttled).", network.Sha))
+				return
+			}
+		}
 	}
 	matchParams, err := json.Marshal(config.Config.Matches.Parameters)
 	if err != nil {
